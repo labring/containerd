@@ -31,6 +31,7 @@ import (
 	"github.com/containerd/containerd/contrib/seccomp"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/snapshots"
 	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
 	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux"
@@ -2126,6 +2127,160 @@ containerEdits:
 						assert.Contains(t, spec.Linux.Devices, expectedDev)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestSnapshotterOpts(t *testing.T) {
+	tests := []struct {
+		name           string
+		snapshotter    string
+		config         *runtime.ContainerConfig
+		sandboxConfig  *runtime.PodSandboxConfig
+		expectedLabels map[string]string
+		expectError    bool
+	}{
+		{
+			name:        "no devbox uid env",
+			snapshotter: "overlayfs",
+			config: &runtime.ContainerConfig{
+				Envs: []*runtime.KeyValue{
+					{Key: "OTHER_ENV", Value: "value"},
+				},
+				Linux: &runtime.LinuxContainerConfig{
+					SecurityContext: &runtime.LinuxContainerSecurityContext{
+						NamespaceOptions: &runtime.NamespaceOption{},
+					},
+				},
+			},
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					"devbox.sealos.io/uid": "1000",
+				},
+			},
+			expectedLabels: nil,
+			expectError:    false,
+		},
+		{
+			name:        "with devbox uid env",
+			snapshotter: "overlayfs",
+			config: &runtime.ContainerConfig{
+				Envs: []*runtime.KeyValue{
+					{Key: "SEALOS_DEVBOX_UID", Value: "1000"},
+				},
+				Linux: &runtime.LinuxContainerConfig{
+					SecurityContext: &runtime.LinuxContainerSecurityContext{
+						NamespaceOptions: &runtime.NamespaceOption{},
+					},
+				},
+			},
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					"devbox.sealos.io/uid": "1000",
+				},
+			},
+			expectedLabels: map[string]string{
+				"devbox.sealos.io/uid": "1000",
+			},
+			expectError: false,
+		},
+		{
+			name:        "empty devbox uid env",
+			snapshotter: "overlayfs",
+			config: &runtime.ContainerConfig{
+				Envs: []*runtime.KeyValue{
+					{Key: "SEALOS_DEVBOX_UID", Value: ""},
+				},
+				Linux: &runtime.LinuxContainerConfig{
+					SecurityContext: &runtime.LinuxContainerSecurityContext{
+						NamespaceOptions: &runtime.NamespaceOption{},
+					},
+				},
+			},
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					"devbox.sealos.io/uid": "1000",
+				},
+			},
+			expectedLabels: nil,
+			expectError:    false,
+		},
+		{
+			name:        "with userns options",
+			snapshotter: "overlayfs",
+			config: &runtime.ContainerConfig{
+				Envs: []*runtime.KeyValue{
+					{Key: "SEALOS_DEVBOX_UID", Value: "1000"},
+				},
+				Linux: &runtime.LinuxContainerConfig{
+					SecurityContext: &runtime.LinuxContainerSecurityContext{
+						NamespaceOptions: &runtime.NamespaceOption{
+							UsernsOptions: &runtime.UserNamespace{
+								Mode: runtime.NamespaceMode_POD,
+								Uids: []*runtime.IDMapping{
+									{
+										ContainerId: 0,
+										HostId:      1000,
+										Length:      1,
+									},
+								},
+								Gids: []*runtime.IDMapping{
+									{
+										ContainerId: 0,
+										HostId:      1000,
+										Length:      1,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					"devbox.sealos.io/uid": "1000",
+				},
+			},
+			expectedLabels: map[string]string{
+				"devbox.sealos.io/uid": "1000",
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, err := snapshotterOpts(tt.snapshotter, tt.config, tt.sandboxConfig)
+			if tt.expectError {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.NotNil(t, opts)
+
+			// Always collect and check labels
+			allLabels := make(map[string]string)
+			// Collect all labels from all options
+			for _, opt := range opts {
+				info := &snapshots.Info{
+					Labels: make(map[string]string),
+				}
+				opt(info)
+				for k, v := range info.Labels {
+					allLabels[k] = v
+				}
+			}
+
+			// If we have expected labels, check if they are present
+			if tt.expectedLabels != nil {
+				for key, value := range tt.expectedLabels {
+					assert.Contains(t, allLabels, key, "Expected label key %s not found", key)
+					assert.Equal(t, value, allLabels[key], "Label value mismatch for key %s", key)
+				}
+			} else {
+				// If no labels are expected, verify that no devbox uid label is present
+				assert.NotContains(t, allLabels, "devbox.sealos.io/uid", "Unexpected devbox uid label found")
 			}
 		})
 	}
