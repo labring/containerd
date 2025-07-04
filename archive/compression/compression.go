@@ -19,7 +19,6 @@ package compression
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -28,6 +27,8 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+
+	"github.com/klauspost/compress/gzip"
 
 	"github.com/containerd/log"
 	"github.com/klauspost/compress/zstd"
