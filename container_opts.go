@@ -229,7 +229,23 @@ func WithNewSnapshot(id string, i Image, opts ...snapshots.Opt) NewContainerOpts
 		if err != nil {
 			return err
 		}
-		if _, err := s.Prepare(ctx, id, parent, opts...); err != nil {
+		base := snapshots.Info{}
+		for _, opt := range opts {
+			if err := opt(&base); err != nil {
+				return fmt.Errorf("error applying snapshot option: %w", err)
+			}
+		}
+		start_opts := []snapshots.Opt{}
+		// if sealos.io/devbox/use-limit is set, move it to containerd.io/snapshot/new-layer-limit
+		if limit, ok := base.Labels["sealos.io/devbox/use-limit"]; ok {
+			if limit != "" {
+				start_opts = append(start_opts, snapshots.WithLabels(map[string]string{
+					"containerd.io/snapshot/new-layer-limit": limit,
+				}))
+			}
+		}
+		start_opts = append(start_opts, opts...)
+		if _, err := s.Prepare(ctx, id, parent, start_opts...); err != nil {
 			return err
 		}
 		c.SnapshotKey = id
