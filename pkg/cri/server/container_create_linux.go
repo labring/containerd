@@ -610,6 +610,24 @@ func generateUserString(username string, uid, gid *runtime.Int64Value) (string, 
 	return userstr, nil
 }
 
+// snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
+func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
+	fmt.Printf("devboxSnapshotterOpts: snapshotterName=%s, config=%+v\n", snapshotterName, config)
+	if snapshotterName != "sealos-devbox-snapshotter" {
+		return nil, nil
+	}
+	// add container annotations to snapshot labels
+	labels := make(map[string]string)
+	for k, v := range config.Annotations {
+		// if strings.HasPrefix(k, DevboxSnapshotLabelPrefix) {
+		labels[k] = v
+		fmt.Printf("devboxSnapshotterOpts: k=%s, v=%s\n", k, v)
+		// }
+	}
+	// labels["sealos.io/devbox/use-limit"] = "10Gi"
+	return snapshots.WithLabels(labels), nil
+}
+
 // use SEALOS_DEVBOX_UID to set the uid of the container
 // we don't use pod annotations or labels because it will cause circular dependency
 const devboxUidEnvKey = "devbox.sealos.io/uid"
