@@ -1,6 +1,8 @@
 module github.com/containerd/containerd
 
-go 1.21
+go 1.23.0
+
+toolchain go1.24.4
 
 require (
 	dario.cat/mergo v1.0.0
@@ -33,7 +35,7 @@ require (
 	github.com/docker/go-events v0.0.0-20190806004212-e31b211e4f1c
 	github.com/docker/go-metrics v0.0.1
 	github.com/docker/go-units v0.5.0
-	github.com/emicklei/go-restful/v3 v3.10.1
+	github.com/emicklei/go-restful/v3 v3.10.2
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.4.0
@@ -54,7 +56,9 @@ require (
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/opencontainers/runtime-tools v0.9.1-0.20221107090550-2e043c6bd626
 	github.com/opencontainers/selinux v1.11.0
+	github.com/openebs/lvm-localpv v1.7.0
 	github.com/pelletier/go-toml v1.9.5
+	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.16.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.8.4
@@ -70,21 +74,21 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.19.0
 	go.opentelemetry.io/otel/sdk v1.21.0
 	go.opentelemetry.io/otel/trace v1.21.0
-	golang.org/x/net v0.33.0
-	golang.org/x/sync v0.10.0
-	golang.org/x/sys v0.28.0
+	golang.org/x/net v0.38.0
+	golang.org/x/sync v0.12.0
+	golang.org/x/sys v0.31.0
 	google.golang.org/genproto v0.0.0-20231211222908-989df2bf70f3
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240401170217-c3f982113cda
 	google.golang.org/grpc v1.59.0
 	google.golang.org/protobuf v1.35.2
-	k8s.io/api v0.26.2
+	k8s.io/api v0.27.2
 	k8s.io/apimachinery v0.27.4
 	k8s.io/apiserver v0.26.2
-	k8s.io/client-go v0.26.2
+	k8s.io/client-go v11.0.1-0.20190409021438-1a26190bd76a+incompatible
 	k8s.io/component-base v0.26.2
 	k8s.io/cri-api v0.27.1
-	k8s.io/klog/v2 v2.90.1
-	k8s.io/utils v0.0.0-20230220204549-a5ecb0141aa5
+	k8s.io/klog/v2 v2.100.1
+	k8s.io/utils v0.0.0-20230505201702-9f6742963106
 	tags.cncf.io/container-device-interface v0.8.1
 )
 
@@ -117,10 +121,9 @@ require (
 	github.com/moby/spdystream v0.2.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_model v0.3.0 // indirect
-	github.com/prometheus/common v0.42.0 // indirect
+	github.com/prometheus/client_model v0.4.0 // indirect
+	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
@@ -131,12 +134,12 @@ require (
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/otel/metric v1.21.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.0.0 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
+	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/oauth2 v0.11.0 // indirect
-	golang.org/x/term v0.27.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
+	golang.org/x/term v0.30.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20231120223509-83a465c0220f // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
@@ -151,3 +154,9 @@ require (
 // Workaround for indirect dependency no longer being available.
 // https://github.com/containerd/containerd/issues/9969
 exclude github.com/mitchellh/osext v0.0.0-20151018003038-5e2d6d41470f
+
+replace k8s.io/apimachinery v0.27.2 => k8s.io/apimachinery v0.24.17
+
+replace k8s.io/client-go => k8s.io/client-go v0.26.2
+
+replace k8s.io/api => k8s.io/api v0.26.2

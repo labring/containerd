@@ -613,7 +613,7 @@ func generateUserString(username string, uid, gid *runtime.Int64Value) (string, 
 // snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
 func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
 	fmt.Printf("devboxSnapshotterOpts: snapshotterName=%s, config=%+v\n", snapshotterName, config)
-	if snapshotterName != "sealos-devbox-snapshotter" {
+	if snapshotterName != "devbox" {
 		return nil, nil
 	}
 	// add container annotations to snapshot labels
@@ -624,7 +624,7 @@ func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxCon
 		fmt.Printf("devboxSnapshotterOpts: k=%s, v=%s\n", k, v)
 		// }
 	}
-	// labels["sealos.io/devbox/use-limit"] = "10Gi"
+	// labels["devbox.sealos.io/use-limit"] = "10Gi"
 	return snapshots.WithLabels(labels), nil
 }
 
