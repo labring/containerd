@@ -345,15 +345,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 				}
 			}
 			for _, lvName := range removedLvNames {
-				vol := &apis.LVMVolume{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: lvName,
-					},
-					Spec: apis.VolumeInfo{
-						VolGroup: o.lvmVgName,
-					},
-				}
-				err := lvm.DestroyVolume(vol)
+				err := o.removeLv(lvName)
 				if err != nil {
 					log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
 					continue
@@ -434,15 +426,7 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 	}
 
 	for _, lvName := range cleanupLv {
-		vol := &apis.LVMVolume{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: lvName,
-			},
-			Spec: apis.VolumeInfo{
-				VolGroup: o.lvmVgName,
-			},
-		}
-		err := lvm.DestroyVolume(vol)
+		err := o.removeLv(lvName)
 		if err != nil {
 			log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
 			continue
@@ -640,6 +624,10 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		if err := opt(&base); err != nil {
 			return nil, fmt.Errorf("failed to apply snapshot option: %w", err)
 		}
+	}
+
+	for label, value := range base.Labels {
+		fmt.Printf("Snapshot label: %s=%s\n", label, value)
 	}
 
 	contentId, idOk := base.Labels[devboxContentKey]

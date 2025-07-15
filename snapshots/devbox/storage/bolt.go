@@ -670,21 +670,21 @@ func withDevboxBucket(ctx context.Context, fn func(context.Context, *bolt.Bucket
 		return fmt.Errorf("bucket does not exist: %w", errdefs.ErrNotFound)
 	}
 
-	bkt := vbkt.Bucket(DevboxStoragePathBucket)
+	bkt := vbkt.Bucket(bucketKeySnapshot)
 	if bkt == nil {
 		// Create the devbox storage path bucket if it does not exist
 		var err error
-		bkt, err = vbkt.CreateBucketIfNotExists(DevboxStoragePathBucket)
+		bkt, err = vbkt.CreateBucketIfNotExists(bucketKeySnapshot)
 		if err != nil {
 			return fmt.Errorf("failed to create devbox storage path bucket: %w", err)
 		}
 	}
 
-	dbkt := bkt.Bucket(DevboxStoragePathBucket)
+	dbkt := vbkt.Bucket(DevboxStoragePathBucket)
 	if dbkt == nil {
 		// Create the devbox storage path bucket if it does not exist
 		var err error
-		dbkt, err = bkt.CreateBucketIfNotExists(DevboxStoragePathBucket)
+		dbkt, err = vbkt.CreateBucketIfNotExists(DevboxStoragePathBucket)
 		if err != nil {
 			return fmt.Errorf("failed to create devbox storage path bucket: %w", err)
 		}
@@ -739,7 +739,10 @@ func SetDevboxContent(ctx context.Context, key, contentKey, lvName, path string)
 			return fmt.Errorf("devbox storage path bucket does not exist: %w", errdefs.ErrNotFound)
 		}
 		fmt.Printf("devbox storage path bucket: %s\n", key)
-		bkt.Put(DevboxKeyContentID, []byte(contentKey))
+		err := bkt.Put(DevboxKeyContentID, []byte(contentKey))
+		if err != nil {
+			return fmt.Errorf("failed to set content ID for key %s: %w", key, err)
+		}
 		if dbkt == nil {
 			return fmt.Errorf("devbox storage path bucket does not exist: %w", errdefs.ErrNotFound)
 		}
