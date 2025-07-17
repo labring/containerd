@@ -281,7 +281,7 @@ func (o *snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage,
 }
 
 func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
-	fmt.Println("Prepare called with key:", key, "parent:", parent, "opts:", opts)
+	log.G(ctx).Debug("Prepare called with key:", key, "parent:", parent, "opts:", opts)
 	return o.createSnapshot(ctx, snapshots.KindActive, key, parent, opts)
 }
 
@@ -635,7 +635,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	}
 
 	for label, value := range base.Labels {
-		fmt.Printf("Snapshot label: %s=%s\n", label, value)
+		log.G(ctx).WithFields(logrus.Fields{"label": label, "value": value}).Debug("Snapshot label")
 	}
 
 	contentId, idOk := base.Labels[devboxContentIDKey]
@@ -658,17 +658,17 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			return fmt.Errorf("failed to create snapshot: %w", err)
 		}
 
-		fmt.Println("Created snapshot:", s.ID)
+		log.G(ctx).Debug("Created snapshot:", s.ID)
 		npath = filepath.Join(snapshotDir, s.ID) // use npath instead of path to avoid removing the directory before create
-		fmt.Println("Snapshot directory path:", npath)
+		log.G(ctx).Debug("Snapshot directory path:", npath)
 
 		if idOk && limitOk {
 			var notExistErr error
 			lvName, notExistErr = storage.GetDevboxLvName(ctx, contentId)
-			fmt.Println("LVM logical volume name for content ID:", contentId, "is", lvName)
+			log.G(ctx).Debug("LVM logical volume name for content ID:", contentId, "is", lvName)
 			if notExistErr == nil && lvName != "" {
 				// mount point for the snapshot
-				fmt.Println("LVM logical volume name found for content ID:", contentId, "is", lvName)
+				log.G(ctx).Debug("LVM logical volume name found for content ID:", contentId, "is", lvName)
 				var isMounted bool
 				if isMounted, err = isMountPoint(npath); err != nil {
 					return fmt.Errorf("failed to check if path is a mount point: %w", err)
@@ -724,17 +724,17 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 				if err = cp.Copy(parent_upperdir, filepath.Join(td, "fs"), opt); err != nil {
 					return fmt.Errorf("failed to copy parent upperdir to new snapshot upperdir: %w, from %s to %s", err, parent_upperdir, td)
 				}
-				fmt.Println("Copied parent upperdir to new snapshot upperdir:", td)
+				log.G(ctx).Debug("Copied parent upperdir to new snapshot upperdir:", td)
 			}
 
-			fmt.Println("Prepared LVM directory for snapshot:", td, "with logical volume name:", lvName)
+			log.G(ctx).Debug("Prepared LVM directory for snapshot:", td, "with logical volume name:", lvName)
 			storage.SetDevboxContent(ctx, key, contentId, lvName, npath)
 			if err != nil {
 				return fmt.Errorf("failed to prepare LVM directory for snapshot: %w", err)
 			}
 		} else {
 			td, err = o.prepareDirectory(ctx, snapshotDir, kind)
-			fmt.Println("Created temporary directory for snapshot:", td)
+			log.G(ctx).Debug("Created temporary directory for snapshot:", td)
 		}
 
 		if err != nil {
@@ -759,23 +759,23 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			if err != nil {
 				return fmt.Errorf("failed to unmount LVM logical volume %s: %w", lvName, err)
 			}
-			fmt.Println("Unmounted LVM logical volume:", lvName, "from temporary directory:", td)
+			log.G(ctx).Debug("Unmounted LVM logical volume:", lvName, "from temporary directory:", td)
 			if err = os.MkdirAll(npath, 0755); err != nil {
 				return fmt.Errorf("failed to create snapshot directory: %w", err)
 			}
 			path = npath
-			fmt.Println("Created snapshot directory:", path)
+			log.G(ctx).Debug("Created snapshot directory:", path)
 			err = o.mountLvm(ctx, lvName, path)
 			if err != nil {
 				return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
 			}
-			fmt.Println("Mounted LVM logical volume:", lvName, "to snapshot directory:", path)
+			log.G(ctx).Debug("Mounted LVM logical volume:", lvName, "to snapshot directory:", path)
 		} else {
 			if err = os.Rename(td, npath); err != nil {
 				return fmt.Errorf("failed to rename: %w", err)
 			}
 			path = npath
-			fmt.Println("Renamed temporary directory to snapshot directory:", path)
+			log.G(ctx).Debug("Renamed temporary directory to snapshot directory:", path)
 		}
 		td = ""
 
@@ -826,8 +826,6 @@ func parseUseLimit(useLimit string) (string, error) {
 		return "", fmt.Errorf("invalid use limit format: %s", useLimit)
 	}
 
-	fmt.Println("Parsed use limit:", useLimit, "with multipliers:", multipliers)
-
 	capacity, err := strconv.Atoi(useLimit)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse use limit %s: %w", useLimit, err)
@@ -863,7 +861,6 @@ func (o *snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 	if err != nil {
 		return td, "", fmt.Errorf("failed to parse use limit %s: %w", useLimit, err)
 	}
-	fmt.Println("Parsed use limit:", capacity)
 
 	vol := &apis.LVMVolume{
 		ObjectMeta: metav1.ObjectMeta{
@@ -874,7 +871,7 @@ func (o *snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 			VolGroup: o.lvmVgName,
 		},
 	}
-	fmt.Println("Creating LVM volume:", lvName, "with capacity:", capacity, "in volume group:", o.lvmVgName)
+	log.G(ctx).Debug("Creating LVM volume:", lvName, "with capacity:", capacity, "in volume group:", o.lvmVgName)
 	err = lvm.CreateVolume(vol)
 	if err != nil {
 		return td, "", fmt.Errorf("failed to create LVM logical volume %s: %w", lvName, err)
