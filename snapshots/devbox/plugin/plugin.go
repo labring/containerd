@@ -70,7 +70,7 @@ func init() {
 
 			if config.lvmVgName == "" {
 				// If no LVM VG name is provided, use the default.
-				config.lvmVgName = "ubuntu-vg"
+				config.lvmVgName = "devbox-lvm-vg"
 			}
 			oOpts = append(oOpts, devbox.WithLvmVgName(config.lvmVgName))
 

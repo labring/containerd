@@ -28,6 +28,8 @@ import (
 	"strings"
 	"syscall"
 
+	cp "github.com/otiai10/copy"
+
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/overlay/overlayutils"
@@ -48,9 +50,10 @@ import (
 // the change set between this snapshot and its parent is stored.
 const upperdirKey = "containerd.io/snapshot/overlay.upperdir"
 
-const newLayerLimitKey = "containerd.io/snapshot/new-layer-limit"
-const devboxContentKey = "containerd.io/snapshot/devbox-content-id"
-const removeDevboxContentKey = "containerd.io/snapshot/devbox-remove-content-id"
+const newLayerLimitKey = "containerd.io/snapshot/devbox-storage-limit"
+const devboxContentIDKey = "containerd.io/snapshot/devbox-content-id"
+const privateImageKey = "containerd.io/snapshot/devbox-init"
+const removeContentIDKey = "containerd.io/snapshot/devbox-remove-content-id"
 
 // SnapshotterConfig is used to configure the overlay snapshotter instance
 type SnapshotterConfig struct {
@@ -221,6 +224,11 @@ func (o *snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info
 
 func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (newInfo snapshots.Info, err error) {
 	err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+
+		if value, ok := info.Labels[removeContentIDKey]; ok {
+			storage.RemoveDevboxContent(ctx, value)
+		}
+
 		newInfo, err = storage.UpdateInfo(ctx, info, fieldpaths...)
 		if err != nil {
 			return err
@@ -363,7 +371,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 			return fmt.Errorf("failed to remove devbox content for snapshot %s: %w", key, err)
 		}
 		if mountPath != "" {
-			if err := o.unmountLvm(ctx, mountPath); err != nil {
+			if err = o.unmountLvm(ctx, mountPath); err != nil {
 				log.G(ctx).WithError(err).WithField("path", mountPath).Warn("failed to unmount directory")
 			}
 		}
@@ -621,7 +629,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 	base := snapshots.Info{}
 	for _, opt := range opts {
-		if err := opt(&base); err != nil {
+		if err = opt(&base); err != nil {
 			return nil, fmt.Errorf("failed to apply snapshot option: %w", err)
 		}
 	}
@@ -630,20 +638,24 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		fmt.Printf("Snapshot label: %s=%s\n", label, value)
 	}
 
-	contentId, idOk := base.Labels[devboxContentKey]
+	contentId, idOk := base.Labels[devboxContentIDKey]
 	useLimit, limitOk := base.Labels[newLayerLimitKey]
-	removeContentId, removeIdOk := base.Labels[removeDevboxContentKey]
-
-	if err := o.ms.WithTransaction(ctx, true, func(ctx context.Context) (err error) {
-		if removeIdOk {
-			storage.SetDevboxContentStatusRemove(ctx, removeContentId)
-		}
+	_, privateImageOk := base.Labels[privateImageKey]
+	if err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) (err error) {
 
 		snapshotDir := filepath.Join(o.root, "snapshots")
 
-		s, err = storage.CreateSnapshot(ctx, kind, key, parent, opts...)
+		directParent := parent
+		if privateImageOk {
+			directParent, err = storage.GetParentID(ctx, parent)
+			if err != nil {
+				return fmt.Errorf("failed to get parent ID for private image: %w", err)
+			}
+		}
+
+		s, err = storage.CreateSnapshot(ctx, kind, key, directParent, opts...)
 		if err != nil {
-			return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
+			return fmt.Errorf("failed to create snapshot: %w", err)
 		}
 
 		fmt.Println("Created snapshot:", s.ID)
@@ -657,7 +669,8 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			if notExistErr == nil && lvName != "" {
 				// mount point for the snapshot
 				fmt.Println("LVM logical volume name found for content ID:", contentId, "is", lvName)
-				if isMounted, err := isMountPoint(npath); err != nil {
+				var isMounted bool
+				if isMounted, err = isMountPoint(npath); err != nil {
 					return fmt.Errorf("failed to check if path is a mount point: %w", err)
 				} else if isMounted {
 					log.G(ctx).Infof("Path %s is already mounted, skipping mount", npath)
@@ -691,6 +704,29 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			if err != nil {
 				return fmt.Errorf("failed to prepare LVM directory for snapshot: %w", err)
 			}
+
+			if privateImageOk {
+				var parentID string
+				parentID, err = storage.GetID(ctx, parent)
+				if err != nil {
+					return fmt.Errorf("failed to get parent ID for private image: %w", err)
+				}
+				parent_upperdir := o.upperPath(parentID)
+				// copy all contents from parent upperdir to new snapshot upperdir
+				// TODO: maybe move instead of copy?
+				opt := cp.Options{
+					OnSymlink: func(src string) cp.SymlinkAction {
+						return cp.Shallow
+					},
+					PreserveTimes: true,
+					PreserveOwner: true,
+				}
+				if err = cp.Copy(parent_upperdir, filepath.Join(td, "fs"), opt); err != nil {
+					return fmt.Errorf("failed to copy parent upperdir to new snapshot upperdir: %w, from %s to %s", err, parent_upperdir, td)
+				}
+				fmt.Println("Copied parent upperdir to new snapshot upperdir:", td)
+			}
+
 			fmt.Println("Prepared LVM directory for snapshot:", td, "with logical volume name:", lvName)
 			storage.SetDevboxContent(ctx, key, contentId, lvName, npath)
 			if err != nil {
@@ -706,13 +742,14 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		}
 
 		if len(s.ParentIDs) > 0 {
-			st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
+			var st os.FileInfo
+			st, err = os.Stat(o.upperPath(s.ParentIDs[0]))
 			if err != nil {
 				return fmt.Errorf("failed to stat parent: %w", err)
 			}
 
 			stat := st.Sys().(*syscall.Stat_t)
-			if err := os.Lchown(filepath.Join(td, "fs"), int(stat.Uid), int(stat.Gid)); err != nil {
+			if err = os.Lchown(filepath.Join(td, "fs"), int(stat.Uid), int(stat.Gid)); err != nil {
 				return fmt.Errorf("failed to chown: %w", err)
 			}
 		}

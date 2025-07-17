@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/content"
@@ -236,20 +237,13 @@ func WithNewSnapshot(id string, i Image, opts ...snapshots.Opt) NewContainerOpts
 			}
 		}
 		start_opts := []snapshots.Opt{}
-		// if sealos.io/devbox/use-limit is set, move it to containerd.io/snapshot-new-layer-limit
-		if limit, ok := base.Labels["sealos.io/devbox-use-limit"]; ok {
-			if limit != "" {
+		for label, value := range base.Labels {
+			// if label start with "devbox.sealos.io/", transform it to "containerd.io/snapshot/"
+			if strings.HasPrefix(label, "devbox.sealos.io/") {
 				start_opts = append(start_opts, snapshots.WithLabels(map[string]string{
-					"containerd.io/snapshot/new-layer-limit": limit,
+					"containerd.io/snapshot/devbox-" + label[len("devbox.sealos.io/"):]: value,
 				}))
-				fmt.Printf("Using devbox layer limit: %s\n", limit)
 			}
-		}
-		if contentId, ok := base.Labels["containerd.io/snapshot-devbox-content-id"]; ok && contentId != "" {
-			start_opts = append(start_opts, snapshots.WithLabels(map[string]string{
-				"containerd.io/snapshot/devbox-content-id": contentId,
-			}))
-			fmt.Printf("Using devbox content ID: %s\n", contentId)
 		}
 		start_opts = append(start_opts, opts...)
 		if _, err := s.Prepare(ctx, id, parent, start_opts...); err != nil {
