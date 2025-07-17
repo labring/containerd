@@ -32,7 +32,7 @@ type Config struct {
 	RootPath      string `toml:"root_path"`
 	UpperdirLabel bool   `toml:"upperdir_label"`
 	SyncRemove    bool   `toml:"sync_remove"`
-	lvmVgName     string `toml:"lvm_vg_name"`
+	LvmVgName     string `toml:"lvm_vg_name"`
 
 	// MountOptions are options used for the overlay mount (not used on bind mounts)
 	MountOptions []string `toml:"mount_options"`
@@ -68,11 +68,11 @@ func init() {
 				oOpts = append(oOpts, devbox.WithMountOptions(config.MountOptions))
 			}
 
-			if config.lvmVgName == "" {
+			if config.LvmVgName == "" {
 				// If no LVM VG name is provided, use the default.
-				config.lvmVgName = "devbox-lvm-vg"
+				config.LvmVgName = "devbox-lvm-vg"
 			}
-			oOpts = append(oOpts, devbox.WithLvmVgName(config.lvmVgName))
+			oOpts = append(oOpts, devbox.WithLvmVgName(config.LvmVgName))
 
 			ic.Meta.Exports[plugin.SnapshotterRootDir] = root
 			return devbox.NewSnapshotter(root, oOpts...)
