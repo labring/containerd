@@ -720,7 +720,6 @@ func GetDevboxLvName(ctx context.Context, contentKey string) (string, error) {
 		// 	return fmt.Errorf("LVM name for content key %s not found: %w", contentKey, errdefs.ErrNotFound)
 		// }
 		lvName = string(lvNameByte)
-		fmt.Printf("lvName: %s\n", lvName)
 		return nil
 	})
 	if err != nil {
@@ -740,7 +739,6 @@ func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) 
 		if bkt == nil {
 			return fmt.Errorf("devbox storage path bucket does not exist: %w", errdefs.ErrNotFound)
 		}
-		fmt.Printf("devbox storage path bucket: %s\n", key)
 		err := bkt.Put(DevboxKeyContentID, []byte(contentID))
 		if err != nil {
 			return fmt.Errorf("failed to set content ID for key %s: %w", key, err)
@@ -778,7 +776,6 @@ func SetDevboxContentStatusRemove(ctx context.Context, contentID string) error {
 		if err := sdbkt.Put(DevboxKeyStatus, DevboxStatusRemoved); err != nil {
 			return fmt.Errorf("failed to set status for content key %s: %w", contentID, err)
 		}
-		fmt.Printf("Set devbox content status for key: %s, status: %s\n", contentID, DevboxStatusRemoved)
 		return nil
 	})
 }
@@ -787,7 +784,6 @@ func RemoveDevboxContent(ctx context.Context, Key string) (string, error) {
 	var (
 		mountPath string
 	)
-	fmt.Printf("Removing devbox content for key: %s\n", Key)
 	if Key == "" {
 		return "", fmt.Errorf("content key cannot be empty")
 	}
@@ -801,7 +797,6 @@ func RemoveDevboxContent(ctx context.Context, Key string) (string, error) {
 			return errdefs.ErrNotFound
 		}
 		contentID := sbkt.Get(DevboxKeyContentID)
-		fmt.Printf("devbox storage path bucket for key: %s, content ID: %s\n", Key, string(contentID))
 		mountPath = string(sbkt.Get(DevboxKeyPath))
 		if contentID == nil {
 			// return fmt.Errorf("content ID for key %s not found: %w", Key, errdefs.ErrNotFound)
@@ -820,7 +815,6 @@ func RemoveDevboxContent(ctx context.Context, Key string) (string, error) {
 			if string(status) == string(DevboxStatusRemoved) {
 				// remove the bucket if it is already marked as removed
 				dbkt.DeleteBucket([]byte(contentID))
-				fmt.Printf("Removed devbox content for key: %s, content ID: %s\n", Key, string(contentID))
 			} else {
 				// if the status is not removed, only remove the mount path
 				sdbkt.Delete([]byte(DevboxKeyPath))
@@ -831,7 +825,6 @@ func RemoveDevboxContent(ctx context.Context, Key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("Removed devbox content for key: %s, mount path: %s\n", Key, mountPath)
 	return mountPath, nil
 }
 
