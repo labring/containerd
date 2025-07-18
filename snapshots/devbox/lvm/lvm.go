@@ -219,11 +219,12 @@ func buildLVMCreateArgs(vol *apis.LVMVolume) []string {
 	volume := vol.Name
 	size := vol.Spec.Capacity + "b"
 	// thinpool name required for thinProvision volumes
-	pool := vol.Spec.VolGroup + "_thinpool"
+	// pool := vol.Spec.VolGroup + "_thinpool"
+	pool := vol.Spec.ThinProvision
 
 	if len(vol.Spec.Capacity) != 0 {
 		// check if thin pool exists for given volumegroup requested thin volume
-		if strings.TrimSpace(vol.Spec.ThinProvision) != YES {
+		if strings.TrimSpace(vol.Spec.ThinProvision) == "" {
 			LVMVolArg = append(LVMVolArg, "-L", size)
 		} else if !lvThinExists(vol.Spec.VolGroup, pool) {
 			// thinpool size can't be equal or greater than actual volumegroup size
@@ -233,7 +234,7 @@ func buildLVMCreateArgs(vol *apis.LVMVolume) []string {
 
 	// command to create thinpool and thin volume if thinProvision is enabled
 	// `lvcreate -L 1G -T lvmvg/mythinpool -V 1G -n thinvol`
-	if strings.TrimSpace(vol.Spec.ThinProvision) == YES {
+	if strings.TrimSpace(vol.Spec.ThinProvision) != "" {
 		LVMVolArg = append(LVMVolArg, "-T", vol.Spec.VolGroup+"/"+pool, "-V", size)
 	}
 
@@ -241,7 +242,7 @@ func buildLVMCreateArgs(vol *apis.LVMVolume) []string {
 		LVMVolArg = append(LVMVolArg, "-n", volume)
 	}
 
-	if strings.TrimSpace(vol.Spec.ThinProvision) != YES {
+	if strings.TrimSpace(vol.Spec.ThinProvision) == "" {
 		LVMVolArg = append(LVMVolArg, vol.Spec.VolGroup)
 	}
 
@@ -886,7 +887,7 @@ func ListLVMLogicalVolume() ([]LogicalVolume, error) {
 }
 
 // modified by sealos
-func ListLVMLogicalVolumeByVG(vg string) ([]LogicalVolume, error) {
+func ListLVMLogicalVolumeByVG(vg string, pool string) ([]LogicalVolume, error) {
 	if err := ReloadLVMMetadataCache(); err != nil {
 		return nil, err
 	}
@@ -896,6 +897,9 @@ func ListLVMLogicalVolumeByVG(vg string) ([]LogicalVolume, error) {
 		"--reportformat", "json",
 		"--units", "b",
 		"--select", fmt.Sprintf("vg_name=%s", vg),
+	}
+	if pool != "" {
+		args = append(args, "--select", fmt.Sprintf("pool_lv=%s", pool))
 	}
 	output, _, err := RunCommandSplit(LVList, args...)
 	if err != nil {
