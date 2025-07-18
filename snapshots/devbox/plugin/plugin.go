@@ -33,6 +33,7 @@ type Config struct {
 	UpperdirLabel bool   `toml:"upperdir_label"`
 	SyncRemove    bool   `toml:"sync_remove"`
 	LvmVgName     string `toml:"lvm_vg_name"`
+	ThinPoolName  string `toml:"thin_pool_name"`
 
 	// MountOptions are options used for the overlay mount (not used on bind mounts)
 	MountOptions []string `toml:"mount_options"`
@@ -73,6 +74,8 @@ func init() {
 				config.LvmVgName = "devbox-lvm-vg"
 			}
 			oOpts = append(oOpts, devbox.WithLvmVgName(config.LvmVgName))
+
+			oOpts = append(oOpts, devbox.WithThinPoolName(config.ThinPoolName))
 
 			ic.Meta.Exports[plugin.SnapshotterRootDir] = root
 			return devbox.NewSnapshotter(root, oOpts...)

@@ -61,6 +61,7 @@ type SnapshotterConfig struct {
 	UpperdirLabel bool
 	ms            MetaStore
 	lvmVgName     string // modified by sealos
+	ThinPoolName  string
 	mountOptions  []string
 }
 
@@ -90,6 +91,13 @@ func WithUpperdirLabel(config *SnapshotterConfig) error {
 func WithLvmVgName(name string) Opt {
 	return func(config *SnapshotterConfig) error {
 		config.lvmVgName = name
+		return nil
+	}
+}
+
+func WithThinPoolName(name string) Opt {
+	return func(config *SnapshotterConfig) error {
+		config.ThinPoolName = name
 		return nil
 	}
 }
@@ -126,6 +134,8 @@ type snapshotter struct {
 	asyncRemove   bool
 	upperdirLabel bool
 	lvmVgName     string // modified by sealos
+	ThinPoolName  string
+	UseThinPool   bool
 	options       []string
 }
 
@@ -182,6 +192,7 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 		asyncRemove:   config.AsyncRemove,
 		upperdirLabel: config.UpperdirLabel,
 		lvmVgName:     config.lvmVgName, // modified by sealos
+		ThinPoolName:  config.ThinPoolName,
 		options:       config.mountOptions,
 	}, nil
 }
@@ -226,7 +237,7 @@ func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpath
 	err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 
 		if value, ok := info.Labels[removeContentIDKey]; ok {
-			storage.RemoveDevboxContent(ctx, value)
+			storage.SetDevboxContentStatusRemoved(ctx, value)
 		}
 
 		newInfo, err = storage.UpdateInfo(ctx, info, fieldpaths...)
@@ -365,7 +376,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		// modified by sealos
 		var mountPath string
-		mountPath, err = storage.RemoveDevboxContent(ctx, key)
+		mountPath, err = storage.RemoveDevbox(ctx, key)
 		log.G(ctx).Infof("Removed devbox content for key: %s, mount path: %s", key, mountPath)
 		if err != nil && err != errdefs.ErrNotFound {
 			return fmt.Errorf("failed to remove devbox content for snapshot %s: %w", key, err)
@@ -502,7 +513,7 @@ func (o *snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
 	}
 
 	// lvs := o.vgo.ListLVs()
-	lvs, err := lvm.ListLVMLogicalVolumeByVG(o.lvmVgName)
+	lvs, err := lvm.ListLVMLogicalVolumeByVG(o.lvmVgName, o.ThinPoolName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list LVM logical volumes: %w", err)
 	}
@@ -689,7 +700,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			// remove devbox metadata if new lv is created
 			defer func() {
 				if err != nil {
-					mountPath, err := storage.RemoveDevboxContent(ctx, key)
+					mountPath, err := storage.RemoveDevbox(ctx, key)
 					if err != nil {
 						log.G(ctx).WithError(err).Warnf("failed to remove devbox content for key %s", contentId)
 					}
@@ -867,8 +878,9 @@ func (o *snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 			Name: lvName,
 		},
 		Spec: apis.VolumeInfo{
-			Capacity: capacity,
-			VolGroup: o.lvmVgName,
+			Capacity:      capacity,
+			VolGroup:      o.lvmVgName,
+			ThinProvision: o.ThinPoolName,
 		},
 	}
 	log.G(ctx).Debug("Creating LVM volume:", lvName, "with capacity:", capacity, "in volume group:", o.lvmVgName)
