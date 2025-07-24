@@ -532,6 +532,27 @@ func (o *snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
 	return cleanup, nil
 }
 
+func (o *snapshotter) resizeLVMVolume(lvName, useLimit string) error {
+
+	capacity, err := parseUseLimit(useLimit)
+	if err != nil {
+		return fmt.Errorf("failed to parse use limit %s: %w", useLimit, err)
+	}
+
+	vol := &apis.LVMVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: lvName,
+		},
+		Spec: apis.VolumeInfo{
+			Capacity:      capacity,
+			VolGroup:      o.lvmVgName,
+			ThinProvision: o.ThinPoolName,
+		},
+	}
+
+	return lvm.ResizeLVMVolume(vol, false)
+}
+
 func isMountPoint(dir string) (bool, error) {
 	// 读取 /proc/mounts 文件
 	data, err := os.ReadFile("/proc/mounts")
@@ -686,6 +707,9 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 				} else if isMounted {
 					log.G(ctx).Infof("Path %s is already mounted, skipping mount", npath)
 				} else {
+					if err = o.resizeLVMVolume(lvName, useLimit); err != nil {
+						return fmt.Errorf("failed to resize LVM logical volume %s: %w", lvName, err)
+					}
 					// mount the LVM logical volume
 					if err = o.mountLvm(ctx, lvName, npath); err != nil {
 						return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
