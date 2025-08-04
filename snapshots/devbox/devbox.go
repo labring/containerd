@@ -710,10 +710,13 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 					if err = o.resizeLVMVolume(lvName, useLimit); err != nil {
 						return fmt.Errorf("failed to resize LVM logical volume %s: %w", lvName, err)
 					}
+
+					storage.SetDevboxContent(ctx, key, contentId, lvName, npath)
 					// mount the LVM logical volume
 					if err = o.mountLvm(ctx, lvName, npath); err != nil {
 						return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
 					}
+					path = npath
 				}
 				// reuse of old lv, no need to prepare a new directory
 				return nil

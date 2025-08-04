@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -618,13 +619,7 @@ func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxCon
 	}
 	// add container annotations to snapshot labels
 	labels := make(map[string]string)
-	for k, v := range config.Annotations {
-		// if strings.HasPrefix(k, DevboxSnapshotLabelPrefix) {
-		labels[k] = v
-		fmt.Printf("devboxSnapshotterOpts: k=%s, v=%s\n", k, v)
-		// }
-	}
-	// labels["devbox.sealos.io/use-limit"] = "10Gi"
+	maps.Copy(labels, config.Annotations)
 	return snapshots.WithLabels(labels), nil
 }
 
