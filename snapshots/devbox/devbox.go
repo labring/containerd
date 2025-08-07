@@ -54,6 +54,7 @@ const newLayerLimitKey = "containerd.io/snapshot/devbox-storage-limit"
 const devboxContentIDKey = "containerd.io/snapshot/devbox-content-id"
 const privateImageKey = "containerd.io/snapshot/devbox-init"
 const removeContentIDKey = "containerd.io/snapshot/devbox-remove-content-id"
+const unmountLvm = "containerd.io/snapshot/devbox-unmount-lvm"
 
 // SnapshotterConfig is used to configure the overlay snapshotter instance
 type SnapshotterConfig struct {
@@ -128,7 +129,7 @@ func WithMetaStore(ms MetaStore) Opt {
 	}
 }
 
-type snapshotter struct {
+type Snapshotter struct {
 	root          string
 	ms            MetaStore
 	asyncRemove   bool
@@ -186,7 +187,7 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 		config.mountOptions = append(config.mountOptions, "index=off")
 	}
 
-	return &snapshotter{
+	return &Snapshotter{
 		root:          root,
 		ms:            config.ms,
 		asyncRemove:   config.AsyncRemove,
@@ -215,7 +216,7 @@ func hasOption(options []string, key string, hasValue bool) bool {
 //
 // Should be used for parent resolution, existence checks and to discern
 // the kind of snapshot.
-func (o *snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info, err error) {
+func (o *Snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info, err error) {
 	var id string
 	if err := o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
 		id, info, _, err = storage.GetInfo(ctx, key)
@@ -233,11 +234,19 @@ func (o *snapshotter) Stat(ctx context.Context, key string) (info snapshots.Info
 	return info, nil
 }
 
-func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (newInfo snapshots.Info, err error) {
+func (o *Snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (newInfo snapshots.Info, err error) {
 	err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 
+		if value, ok := info.Labels[unmountLvm]; ok && value == "true" {
+			mountPath, err := storage.SetUnmountedWithKey(ctx, info.Name)
+			if err != nil {
+				return fmt.Errorf("failed to set devbox content status to unmounted: %w", err)
+			}
+			return o.unmountLvm(ctx, mountPath)
+		}
+
 		if value, ok := info.Labels[removeContentIDKey]; ok {
-			storage.SetDevboxContentStatusRemoved(ctx, value)
+			return storage.SetDevboxContentStatusRemoved(ctx, value)
 		}
 
 		newInfo, err = storage.UpdateInfo(ctx, info, fieldpaths...)
@@ -266,7 +275,7 @@ func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpath
 // "upper") directory and may take some time.
 //
 // For committed snapshots, the value is returned from the metadata database.
-func (o *snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage, err error) {
+func (o *Snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage, err error) {
 	var (
 		usage snapshots.Usage
 		info  snapshots.Info
@@ -291,12 +300,12 @@ func (o *snapshotter) Usage(ctx context.Context, key string) (_ snapshots.Usage,
 	return usage, nil
 }
 
-func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
+func (o *Snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
 	log.G(ctx).Debug("Prepare called with key:", key, "parent:", parent, "opts:", opts)
 	return o.createSnapshot(ctx, snapshots.KindActive, key, parent, opts)
 }
 
-func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
+func (o *Snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
 	return o.createSnapshot(ctx, snapshots.KindView, key, parent, opts)
 }
 
@@ -304,9 +313,28 @@ func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snap
 // called on an read-write or readonly transaction.
 //
 // This can be used to recover mounts after calling View or Prepare.
-func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, err error) {
+func (o *Snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, err error) {
 	var s storage.Snapshot
 	if err := o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
+		var (
+			contentID string
+			path      string
+		)
+
+		contentID, path, err = storage.GetSnapshotDevboxInfo(ctx, key)
+		if err != nil {
+			return fmt.Errorf("failed to get devbox content ID for snapshot %s: %w", key, err)
+		}
+		if contentID != "" {
+			lvName, err := storage.GetDevboxLvName(ctx, contentID, path)
+			if err != nil {
+				return fmt.Errorf("failed to get devbox logical volume name for content ID %s: %w", contentID, err)
+			}
+			if lvName == "" {
+				return fmt.Errorf("logical volume name for content ID %s is empty", contentID)
+			}
+		}
+
 		s, err = storage.GetSnapshot(ctx, key)
 		if err != nil {
 			return fmt.Errorf("failed to get active mount: %w", err)
@@ -318,7 +346,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, 
 	return o.mounts(s), nil
 }
 
-func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
+func (o *Snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
 	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		// grab the existing id
 		id, _, _, err := storage.GetInfo(ctx, key)
@@ -341,7 +369,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 // Remove abandons the snapshot identified by key. The snapshot will
 // immediately become unavailable and unrecoverable. Disk space will
 // be freed up on the next call to `Cleanup`.
-func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
+func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	var (
 		removals       []string
 		removedLvNames []string
@@ -351,30 +379,30 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 	// Remove directories after the transaction is closed, failures must not
 	// return error since the transaction is committed with the removal
 	// key no longer available.
-	defer func() {
-		if err == nil {
-			for _, dir := range removals {
-				// modified by sealos
-				if err1 := o.unmountLvm(ctx, dir); err1 != nil {
-					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
-				}
-				// end modified by sealos
-				if err1 := os.RemoveAll(dir); err1 != nil {
-					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
-				}
-			}
-			for _, lvName := range removedLvNames {
-				err := o.removeLv(lvName)
-				if err != nil {
-					log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
-					continue
-				}
-				log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
-			}
-		}
-	}()
 	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		// modified by sealos
+		defer func() {
+			if err == nil {
+				for _, dir := range removals {
+					// modified by sealos
+					if err1 := o.unmountLvm(ctx, dir); err1 != nil {
+						log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
+					}
+					// end modified by sealos
+					if err1 := os.RemoveAll(dir); err1 != nil {
+						log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
+					}
+				}
+				for _, lvName := range removedLvNames {
+					err := o.removeLv(lvName)
+					if err != nil {
+						log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
+						continue
+					}
+					log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+				}
+			}
+		}()
 		var mountPath string
 		mountPath, err = storage.RemoveDevbox(ctx, key)
 		log.G(ctx).Infof("Removed devbox content for key: %s, mount path: %s", key, mountPath)
@@ -406,7 +434,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 }
 
 // Walk the snapshots.
-func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
+func (o *Snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
 	return o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
 		if o.upperdirLabel {
 			return storage.WalkInfo(ctx, func(ctx context.Context, info snapshots.Info) error {
@@ -426,57 +454,54 @@ func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 }
 
 // Cleanup cleans up disk resources from removed or abandoned snapshots
-func (o *snapshotter) Cleanup(ctx context.Context) error {
+func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	log.G(ctx).Infof("Cleanup called")
-	cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, dir := range cleanup {
-		// modified by sealos
-		if err := o.unmountLvm(ctx, dir); err != nil {
-			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
-		}
-		// end modified by sealos
-		if err := os.RemoveAll(dir); err != nil {
-			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
-		}
-	}
-
-	for _, lvName := range cleanupLv {
-		err := o.removeLv(lvName)
+	return o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
+		cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
 		if err != nil {
-			log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
-			continue
+			return err
 		}
-		log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
-	}
 
-	return nil
+		for _, dir := range cleanup {
+			// modified by sealos
+			if err := o.unmountLvm(ctx, dir); err != nil {
+				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
+			}
+			// end modified by sealos
+			if err := os.RemoveAll(dir); err != nil {
+				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+			}
+		}
+
+		for _, lvName := range cleanupLv {
+			err := o.removeLv(lvName)
+			if err != nil {
+				log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
+				continue
+			}
+			log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+		}
+
+		return nil
+	})
 }
 
-func (o *snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []string, err error) {
+func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []string, err error) {
 	var (
 		cleanupDirs    []string
 		removedLvNames []string
 	)
 	// Get a write transaction to ensure no other write transaction can be entered
 	// while the cleanup is scanning.
-	if err := o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
-		cleanupDirs, err = o.getCleanupDirectories(ctx)
-		if err != nil {
-			return err
-		}
-		removedLvNames, err = o.getCleanupLvNames(ctx)
-		return err
-	}); err != nil {
+	cleanupDirs, err = o.getCleanupDirectories(ctx)
+	if err != nil {
 		return nil, nil, err
 	}
-	return cleanupDirs, removedLvNames, nil
+	removedLvNames, err = o.getCleanupLvNames(ctx)
+	return cleanupDirs, removedLvNames, err
 }
 
-func (o *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
+func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
 	ids, err := storage.IDMap(ctx)
 	if err != nil {
 		return nil, err
@@ -506,7 +531,7 @@ func (o *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, erro
 }
 
 // modified by sealos
-func (o *snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
+func (o *Snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
 	nameMap, err := storage.GetDevboxLvNames(ctx)
 	if err != nil {
 		return nil, err
@@ -532,7 +557,7 @@ func (o *snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
 	return cleanup, nil
 }
 
-func (o *snapshotter) resizeLVMVolume(lvName, useLimit string) error {
+func (o *Snapshotter) resizeLVMVolume(lvName, useLimit string) error {
 
 	capacity, err := parseUseLimit(useLimit)
 	if err != nil {
@@ -581,7 +606,7 @@ func isMountPoint(dir string) (bool, error) {
 	return false, nil
 }
 
-func (o *snapshotter) mkfs(lvName string) error {
+func (o *Snapshotter) mkfs(lvName string) error {
 	devicePath := fmt.Sprintf("/dev/%s/%s", o.lvmVgName, lvName)
 	// Check if the device exists
 	if _, err := os.Stat(devicePath); os.IsNotExist(err) {
@@ -596,7 +621,7 @@ func (o *snapshotter) mkfs(lvName string) error {
 	return nil
 }
 
-func (o *snapshotter) mountLvm(ctx context.Context, lvName string, path string) error {
+func (o *Snapshotter) mountLvm(ctx context.Context, lvName string, path string) error {
 	_, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		if err := os.MkdirAll(path, 0755); err != nil {
@@ -613,7 +638,7 @@ func (o *snapshotter) mountLvm(ctx context.Context, lvName string, path string) 
 	return nil
 }
 
-func (o *snapshotter) unmountLvm(ctx context.Context, path string) error {
+func (o *Snapshotter) unmountLvm(ctx context.Context, path string) error {
 	isMounted, err := isMountPoint(path)
 	if err != nil {
 		return fmt.Errorf("failed to check if path %s is a mount point: %w", path, err)
@@ -631,7 +656,7 @@ func (o *snapshotter) unmountLvm(ctx context.Context, path string) error {
 
 // end modified by sealos
 
-func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ []mount.Mount, err error) {
+func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ []mount.Mount, err error) {
 	var (
 		s                       storage.Snapshot
 		td, path, npath, lvName string
@@ -696,7 +721,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 		if idOk && limitOk {
 			var notExistErr error
-			lvName, notExistErr = storage.GetDevboxLvName(ctx, contentId)
+			lvName, notExistErr = storage.GetDevboxLvName(ctx, contentId, "")
 			log.G(ctx).Debug("LVM logical volume name for content ID:", contentId, "is", lvName)
 			if notExistErr == nil && lvName != "" {
 				// mount point for the snapshot
@@ -825,7 +850,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	return o.mounts(s), nil
 }
 
-func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, kind snapshots.Kind) (string, error) {
+func (o *Snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, kind snapshots.Kind) (string, error) {
 	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
@@ -876,7 +901,7 @@ func parseUseLimit(useLimit string) (string, error) {
 
 }
 
-func (o *snapshotter) removeLv(lvName string) error {
+func (o *Snapshotter) removeLv(lvName string) error {
 	vol := &apis.LVMVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: lvName,
@@ -888,7 +913,7 @@ func (o *snapshotter) removeLv(lvName string) error {
 	return lvm.DestroyVolume(vol)
 }
 
-func (o *snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir string, contentKey string, useLimit string) (string, string, error) {
+func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir string, contentKey string, useLimit string) (string, string, error) {
 	lvName := "devbox-" + contentKey
 	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
@@ -942,7 +967,7 @@ func (o *snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 	return td, lvName, nil
 }
 
-func (o *snapshotter) mounts(s storage.Snapshot) []mount.Mount {
+func (o *Snapshotter) mounts(s storage.Snapshot) []mount.Mount {
 	if len(s.ParentIDs) == 0 {
 		// if we only have one layer/no parents then just return a bind mount as overlay
 		// will not work
@@ -998,16 +1023,16 @@ func (o *snapshotter) mounts(s storage.Snapshot) []mount.Mount {
 
 }
 
-func (o *snapshotter) upperPath(id string) string {
+func (o *Snapshotter) upperPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "fs")
 }
 
-func (o *snapshotter) workPath(id string) string {
+func (o *Snapshotter) workPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "work")
 }
 
 // Close closes the snapshotter
-func (o *snapshotter) Close() error {
+func (o *Snapshotter) Close() error {
 	return o.ms.Close()
 }
 
