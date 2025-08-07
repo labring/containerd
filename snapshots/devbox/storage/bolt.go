@@ -133,7 +133,7 @@ func UpdateInfo(ctx context.Context, info snapshots.Info, fieldpaths ...string) 
 				case "labels":
 					updated.Labels = info.Labels
 				default:
-					return fmt.Errorf("cannot update %q field on snapshot %q: %w", path, info.Name, errdefs.ErrInvalidArgument)
+					return fmt.Errorf("cannot update %q field on snapshot ** %q: %w", path, info.Name, errdefs.ErrInvalidArgument)
 				}
 			}
 		} else {
@@ -693,7 +693,43 @@ func withDevboxBucket(ctx context.Context, fn func(context.Context, *bolt.Bucket
 	return fn(ctx, bkt, dbkt)
 }
 
-func GetDevboxLvName(ctx context.Context, contentKey string) (string, error) {
+func GetSnapshotDevboxInfo(ctx context.Context, key string) (string, string, error) {
+	var (
+		contentID string
+		path      string
+	)
+
+	if key == "" {
+		return "", "", fmt.Errorf("key cannot be empty")
+	}
+
+	err := withDevboxBucket(ctx, func(ctx context.Context, bkt *bolt.Bucket, dbkt *bolt.Bucket) error {
+		sbkt := bkt.Bucket([]byte(key))
+		if sbkt == nil {
+			return fmt.Errorf("snapshot key %s not found: %w", key, errdefs.ErrNotFound)
+		}
+		contentIDByte := sbkt.Get(DevboxKeyContentID)
+		if contentIDByte == nil {
+			return nil
+		}
+		contentID = string(contentIDByte)
+
+		pathByte := sbkt.Get(DevboxKeyPath)
+		if pathByte == nil {
+			return nil
+		}
+		path = string(pathByte)
+
+		return nil
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get devbox info for snapshot %s: %w", key, err)
+	}
+
+	return contentID, path, nil
+}
+
+func GetDevboxLvName(ctx context.Context, contentKey string, path string) (string, error) {
 	var (
 		lvName string
 	)
@@ -711,8 +747,8 @@ func GetDevboxLvName(ctx context.Context, contentKey string) (string, error) {
 			return errdefs.ErrNotFound
 		}
 
-		if mountPath := sdbkt.Get(DevboxKeyPath); mountPath != nil {
-			return fmt.Errorf("devbox lv is already mounted at %s: %w", string(mountPath), errdefs.ErrAlreadyExists)
+		if mountPath := sdbkt.Get(DevboxKeyPath); mountPath != nil && string(mountPath) != path {
+			return fmt.Errorf("devbox lv %s is already mounted at %s, check failed for path %s", contentKey, string(mountPath), path)
 		}
 
 		lvNameByte := sdbkt.Get(DevboxKeyLvName)
@@ -781,6 +817,47 @@ func SetDevboxContentStatusRemoved(ctx context.Context, contentID string) error 
 		}
 		return nil
 	})
+}
+
+func SetUnmountedWithKey(ctx context.Context, key string) (string, error) {
+	var (
+		mountPath string
+	)
+	err := withDevboxBucket(ctx, func(ctx context.Context, bkt *bolt.Bucket, dbkt *bolt.Bucket) error {
+		if bkt == nil {
+			return fmt.Errorf("devbox storage path bucket does not exist: %w", errdefs.ErrNotFound)
+		}
+		sbkt := bkt.Bucket([]byte(key))
+		if sbkt == nil {
+			return fmt.Errorf("devbox storage path bucket for key %s does not exist: %w", key, errdefs.ErrNotFound)
+		}
+		mountPath = string(sbkt.Get(DevboxKeyPath))
+		if mountPath == "" {
+			return fmt.Errorf("mount path for key %s is empty: %w", key, errdefs.ErrNotFound)
+		}
+		contentID := sbkt.Get(DevboxKeyContentID)
+		if len(contentID) == 0 {
+			return fmt.Errorf("content ID for key %s is empty: %w", key, errdefs.ErrNotFound)
+		}
+		sdbkt := dbkt.Bucket([]byte(contentID))
+		if sdbkt == nil {
+			return fmt.Errorf("devbox storage path bucket for content ID %s does not exist: %w", string(contentID), errdefs.ErrNotFound)
+		}
+		if path := sdbkt.Get(DevboxKeyPath); path != nil {
+			if string(path) != mountPath {
+				return fmt.Errorf("new mount path for content ID %s does not match key %s, maybe it was mounted by other container", string(contentID), key)
+			}
+			if err := sdbkt.Delete(DevboxKeyPath); err != nil {
+				return fmt.Errorf("failed to delete mount path for content ID %s: %w", string(contentID), err)
+			}
+			return nil
+		}
+		return fmt.Errorf("mount path for content ID %s is not set, cannot set status to unmounted: %w", string(contentID), errdefs.ErrNotFound)
+	})
+	if err != nil {
+		return "", err
+	}
+	return mountPath, nil
 }
 
 func RemoveDevbox(ctx context.Context, Key string) (string, error) {

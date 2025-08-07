@@ -303,6 +303,21 @@ func (c *Client) NewContainer(ctx context.Context, id string, opts ...NewContain
 	return containerFromRecord(c, r), nil
 }
 
+func (c *Client) UpdateDevboxSnapshot(ctx context.Context, snapshotter string, id string, label string, value string) error {
+	fmt.Println("Check snapshotter:", snapshotter)
+	if snapshotter == "devbox" {
+		_, err := c.SnapshotService(snapshotter).Update(ctx, snapshots.Info{
+			Name:   id,
+			Labels: map[string]string{label: value},
+		}, "labels."+label)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("snapshotter %s is not supported for update: %w", snapshotter, errdefs.ErrNotImplemented)
+}
+
 // LoadContainer loads an existing container from metadata
 func (c *Client) LoadContainer(ctx context.Context, id string) (Container, error) {
 	r, err := c.ContainerService().Get(ctx, id)
@@ -621,15 +636,20 @@ func (c *Client) ContentStore() content.Store {
 
 // SnapshotService returns the underlying snapshotter for the provided snapshotter name
 func (c *Client) SnapshotService(snapshotterName string) snapshots.Snapshotter {
+	fmt.Println("Snapshotter name:", snapshotterName)
 	snapshotterName, err := c.resolveSnapshotterName(context.Background(), snapshotterName)
+	fmt.Println("Resolved snapshotter name:", snapshotterName)
 	if err != nil {
 		snapshotterName = DefaultSnapshotter
+		fmt.Println("Using default snapshotter:", snapshotterName)
 	}
 	if c.snapshotters != nil {
+		fmt.Println("Using cached snapshotter:", snapshotterName)
 		return c.snapshotters[snapshotterName]
 	}
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
+	fmt.Println("Creating new remote snapshotter:", snapshotterName)
 	return snproxy.NewSnapshotter(snapshotsapi.NewSnapshotsClient(c.conn), snapshotterName)
 }
 

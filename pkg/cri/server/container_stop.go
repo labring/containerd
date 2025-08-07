@@ -34,6 +34,8 @@ import (
 	"github.com/containerd/containerd/protobuf"
 )
 
+const unmountLvm = "containerd.io/snapshot/devbox-unmount-lvm"
+
 // StopContainer stops a running container with a grace period (i.e., timeout).
 func (c *criService) StopContainer(ctx context.Context, r *runtime.StopContainerRequest) (*runtime.StopContainerResponse, error) {
 	start := time.Now()
@@ -72,6 +74,21 @@ func (c *criService) StopContainer(ctx context.Context, r *runtime.StopContainer
 	}
 
 	containerStopTimer.WithValues(i.Runtime.Name).UpdateSince(start)
+
+	ociRuntime, err := c.getSandboxRuntime(&runtime.PodSandboxConfig{}, sandbox.Metadata.RuntimeHandler)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sandbox runtime: %w", err)
+	}
+
+	snapshotter := c.runtimeSnapshotter(ctx, ociRuntime)
+
+	fmt.Println("Check snapshotter:", snapshotter)
+
+	err = c.client.UpdateDevboxSnapshot(ctx, snapshotter, i.ID, unmountLvm, "true")
+	if err != nil {
+		fmt.Println("Failed to update devbox snapshot:", err)
+	}
 
 	return &runtime.StopContainerResponse{}, nil
 }
