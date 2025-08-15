@@ -575,7 +575,7 @@ func (o *Snapshotter) resizeLVMVolume(lvName, useLimit string) error {
 		},
 	}
 
-	return lvm.ResizeLVMVolume(vol, false)
+	return lvm.ResizeLVMVolume(vol, true)
 }
 
 func isMountPoint(dir string) (bool, error) {
