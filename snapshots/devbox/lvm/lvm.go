@@ -409,23 +409,23 @@ func ResizeLVMVolume(vol *apis.LVMVolume, resizefs bool) error {
 	// before exapnding LVM volume(If volume is already expanded then
 	// it might be error prone). This also makes ResizeLVMVolume func
 	// idempotent
-	if !resizefs {
-		desiredVolSize, err := strconv.ParseUint(vol.Spec.Capacity, 10, 64)
-		if err != nil {
-			return err
-		}
-
-		curVolSize, err := getLVSize(vol)
-		if err != nil {
-			return err
-		}
-
-		// Trigger resize only when desired volume size is greater than
-		// current volume size else return
-		if desiredVolSize <= curVolSize {
-			return nil
-		}
+	// if !resizefs {
+	desiredVolSize, err := strconv.ParseUint(vol.Spec.Capacity, 10, 64)
+	if err != nil {
+		return err
 	}
+
+	curVolSize, err := getLVSize(vol)
+	if err != nil {
+		return err
+	}
+
+	// Trigger resize only when desired volume size is greater than
+	// current volume size else return
+	if desiredVolSize <= curVolSize {
+		return nil
+	}
+	// }
 
 	volume := vol.Spec.VolGroup + "/" + vol.Name
 
