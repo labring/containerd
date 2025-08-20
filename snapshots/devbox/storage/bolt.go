@@ -879,12 +879,13 @@ func RemoveDevbox(ctx context.Context, Key string) (string, error) {
 		contentID := sbkt.Get(DevboxKeyContentID)
 		mountPath = string(sbkt.Get(DevboxKeyPath))
 		if len(contentID) == 0 {
-			fmt.Printf("content ID for key %s is empty, continuing with snapshotter removal\n", Key)
+			// fmt.Printf("content ID for key %s is empty, continuing with snapshotter removal\n", Key)
 			return nil // if contentID is nil, continue with the snapshotter removal
 		}
 		sdbkt := dbkt.Bucket([]byte(contentID))
 		if sdbkt == nil {
-			return fmt.Errorf("devbox storage path bucket for content ID %s does not exist: %w", string(contentID), errdefs.ErrNotFound)
+			// return fmt.Errorf("devbox storage path bucket for content ID %s does not exist: %w", string(contentID), errdefs.ErrNotFound)
+			return nil
 		}
 		if status := sdbkt.Get(DevboxKeyStatus); status != nil {
 			if string(status) == string(DevboxStatusRemoved) {
@@ -923,7 +924,7 @@ func GetDevboxLvNames(ctx context.Context) (map[string]string, error) {
 	}); err != nil {
 		return nil, err
 	}
-	fmt.Printf("devbox lv names: %v\n", m)
+	// fmt.Printf("devbox lv names: %v\n", m)
 
 	return m, nil
 }
