@@ -276,11 +276,19 @@ func RunCommandSplit(command string, args ...string) ([]byte, []byte, error) {
 	output := cmdStdout.Bytes()
 	error_output := cmdStderr.Bytes()
 
+	// format error info
+	var cleanStderr string
 	if len(error_output) > 0 {
 		klog.Warningf("lvm: said into stderr: %s", error_output)
+        cleanStderr = strings.TrimSpace(string(error_output))
+        cleanStderr = strings.ReplaceAll(cleanStderr, "\n", " | ")
+        cleanStderr = strings.Join(strings.Fields(cleanStderr), " ")
 	}
 
-	return output, error_output, err
+	if cleanStderr != "" {
+        return output, error_output, fmt.Errorf("%s, %v", cleanStderr, err)
+    }
+    return output, error_output, err
 }
 
 // CreateVolume creates the lvm volume
