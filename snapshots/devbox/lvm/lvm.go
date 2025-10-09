@@ -280,7 +280,7 @@ func RunCommandSplit(command string, args ...string) ([]byte, []byte, error) {
 		klog.Warningf("lvm: said into stderr: %s", error_output)
 	}
 
-	return output, error_output, err
+    return output, error_output, err
 }
 
 // CreateVolume creates the lvm volume
