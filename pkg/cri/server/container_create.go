@@ -189,12 +189,15 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 		return nil, err
 	}
 
-	devboxOpt, err := devboxSnapshotterOpts(c.runtimeSnapshotter(ctx, ociRuntime), r.GetSandboxConfig())
-	if err != nil {
-		return nil, err
-	}
-	if devboxOpt != nil {
-		sOpts = append(sOpts, devboxOpt)
+	// Check if the snapshotter is devbox and add the devbox snapshotter opts
+	if c.runtimeSnapshotter(ctx, ociRuntime) == "devbox" {
+		devboxOpt, err := devboxSnapshotterOpts(c.runtimeSnapshotter(ctx, ociRuntime), r.GetSandboxConfig())
+		if err != nil {
+			return nil, err
+		}
+		if devboxOpt != nil {
+			sOpts = append(sOpts, devboxOpt)
+		}
 	}
 
 	// Set snapshotter before any other options.
