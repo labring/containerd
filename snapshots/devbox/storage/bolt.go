@@ -53,6 +53,7 @@ var (
 	DevboxKeyPath           = []byte("path")
 	DevboxKeyLvName         = []byte("lv_name")
 	DevboxKeyStatus         = []byte("status")
+	DevboxKeyContainerID    = []byte("container_id")
 
 	DevboxStatusActive  = []byte("active")
 	DevboxStatusRemoved = []byte("removed")
@@ -765,8 +766,51 @@ func GetDevboxLvName(ctx context.Context, contentKey string, path string) (strin
 	return lvName, nil
 }
 
-func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) error {
-	if contentID == "" || lvName == "" || path == "" {
+// GetDevboxContentData returns the data from the contentID bucket
+func GetDevboxContentData(ctx context.Context, contentID string) (string, string, string, string, error) {
+	var (
+		lvName      string
+		path        string
+		status      string
+		containerID string
+	)
+
+	if contentID == "" {
+		return "", "", "", "", fmt.Errorf("contentID cannot be empty")
+	}
+
+	err := withDevboxBucket(ctx, func(ctx context.Context, bkt *bolt.Bucket, dbkt *bolt.Bucket) error {
+		if dbkt == nil {
+			return fmt.Errorf("devbox contentID bucket does not exist: %w", errdefs.ErrNotFound)
+		}
+		sdbkt := dbkt.Bucket([]byte(contentID))
+		if sdbkt == nil {
+			return fmt.Errorf("bucket for contentID %s not found: %w", contentID, errdefs.ErrNotFound)
+		}
+		if containerIDByte := sdbkt.Get(DevboxKeyContainerID); containerIDByte != nil {
+			containerID = string(containerIDByte)
+		}
+		if lvNameByte := sdbkt.Get(DevboxKeyLvName); lvNameByte != nil {
+			lvName = string(lvNameByte)
+		}
+		if pathByte := sdbkt.Get(DevboxKeyPath); pathByte != nil {
+			path = string(pathByte)
+		}
+		if statusByte := sdbkt.Get(DevboxKeyStatus); statusByte != nil {
+			status = string(statusByte)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", "", "", "", err
+	}
+
+	return lvName, path, status, containerID, nil
+}
+
+func SetDevboxContent(ctx context.Context, key, contentID, lvName, path, containerID string) error {
+	if contentID == "" || lvName == "" || path == "" || containerID == "" {
 		return fmt.Errorf("content key and storage path cannot be empty")
 	}
 
@@ -775,8 +819,7 @@ func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) 
 		if sbkt == nil {
 			return fmt.Errorf("snapshot key %s not found: %w", key, errdefs.ErrNotFound)
 		}
-		err := sbkt.Put(DevboxKeyContentID, []byte(contentID))
-		if err != nil {
+		if err := sbkt.Put(DevboxKeyContentID, []byte(contentID)); err != nil {
 			return fmt.Errorf("failed to set content ID for key %s: %w", key, err)
 		}
 		if err := sbkt.Put([]byte(DevboxKeyPath), []byte(path)); err != nil {
@@ -794,6 +837,9 @@ func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) 
 		}
 		if err := sdbkt.Put([]byte(DevboxKeyPath), []byte(path)); err != nil {
 			return fmt.Errorf("failed to set devbox path for content key %s: %w", contentID, err)
+		}
+		if err := sdbkt.Put([]byte(DevboxKeyContainerID), []byte(containerID)); err != nil {
+			return fmt.Errorf("failed to set container ID for content key %s: %w", contentID, err)
 		}
 		if err := sdbkt.Put([]byte(DevboxKeyStatus), []byte(DevboxStatusActive)); err != nil {
 			return fmt.Errorf("failed to set status for content key %s: %w", contentID, err)
@@ -892,8 +938,16 @@ func RemoveDevbox(ctx context.Context, Key string) (string, error) {
 				// remove the bucket if it is already marked as removed
 				dbkt.DeleteBucket([]byte(contentID))
 			} else {
-				// if the status is not removed, only remove the mount path
-				sdbkt.Delete([]byte(DevboxKeyPath))
+				// if the container ID is the same as the key, prove that the container is using this devbox
+				var containerID []byte
+				if containerID = sdbkt.Get(DevboxKeyContainerID); containerID != nil && string(containerID) == Key {
+					// if the status is not removed, only remove the mount path
+					// pathBeforeDelete := string(sdbkt.Get(DevboxKeyPath))
+					sdbkt.Delete([]byte(DevboxKeyPath))
+					// fmt.Printf("=======RemoveDevbox: Remove mount path for content ID:%s, mount path:%s, container ID:%s, key:%s\n", string(contentID), pathBeforeDelete, string(containerID), Key)
+				}
+				// if the container ID is not the same as the key, do not delete path
+				// fmt.Printf("=======RemoveDevbox: Do not remove mount path for content ID:%s, container ID:%s, key:%s\n", string(contentID), string(containerID), Key)
 			}
 		}
 		return nil
