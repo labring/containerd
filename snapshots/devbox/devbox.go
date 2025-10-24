@@ -736,7 +736,10 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 						return fmt.Errorf("failed to resize LVM logical volume %s: %w", lvName, err)
 					}
 
-					storage.SetDevboxContent(ctx, key, contentId, lvName, npath)
+					if err = storage.SetDevboxContent(ctx, key, contentId, lvName, npath, key); err != nil {
+						return fmt.Errorf("failed to set devbox content: %w", err)
+					}
+
 					// mount the LVM logical volume
 					if err = o.mountLvm(ctx, lvName, npath); err != nil {
 						return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
@@ -791,9 +794,8 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			}
 
 			log.G(ctx).Debug("Prepared LVM directory for snapshot:", td, "with logical volume name:", lvName)
-			storage.SetDevboxContent(ctx, key, contentId, lvName, npath)
-			if err != nil {
-				return fmt.Errorf("failed to prepare LVM directory for snapshot: %w", err)
+			if err = storage.SetDevboxContent(ctx, key, contentId, lvName, npath, key); err != nil {
+				return fmt.Errorf("failed to set devbox content: %w", err)
 			}
 		} else {
 			td, err = o.prepareDirectory(ctx, snapshotDir, kind)

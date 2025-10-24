@@ -613,7 +613,7 @@ func generateUserString(username string, uid, gid *runtime.Int64Value) (string, 
 
 // snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
 func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
-	fmt.Printf("devboxSnapshotterOpts: snapshotterName=%s, config=%+v\n", snapshotterName, config)
+	// fmt.Printf("devboxSnapshotterOpts: snapshotterName=%s, config=%+v\n", snapshotterName, config)
 	// add container annotations to snapshot labels
 	labels := make(map[string]string)
 	maps.Copy(labels, config.Annotations)
