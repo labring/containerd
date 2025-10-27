@@ -305,17 +305,14 @@ func (c *Client) NewContainer(ctx context.Context, id string, opts ...NewContain
 
 func (c *Client) UpdateDevboxSnapshot(ctx context.Context, snapshotter string, id string, label string, value string) error {
 	fmt.Println("Check snapshotter:", snapshotter)
-	if snapshotter == "devbox" {
-		_, err := c.SnapshotService(snapshotter).Update(ctx, snapshots.Info{
-			Name:   id,
-			Labels: map[string]string{label: value},
-		}, "labels."+label)
-		if err != nil {
-			return err
-		}
-		return nil
+	_, err := c.SnapshotService(snapshotter).Update(ctx, snapshots.Info{
+		Name:   id,
+		Labels: map[string]string{label: value},
+	}, "labels."+label)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("snapshotter %s is not supported for update: %w", snapshotter, errdefs.ErrNotImplemented)
+	return nil
 }
 
 // LoadContainer loads an existing container from metadata

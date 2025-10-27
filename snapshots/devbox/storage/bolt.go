@@ -53,6 +53,7 @@ var (
 	DevboxKeyPath           = []byte("path")
 	DevboxKeyLvName         = []byte("lv_name")
 	DevboxKeyStatus         = []byte("status")
+	DevboxKeySnapshotKey    = []byte("snapshot_key")
 
 	DevboxStatusActive  = []byte("active")
 	DevboxStatusRemoved = []byte("removed")
@@ -729,7 +730,7 @@ func GetSnapshotDevboxInfo(ctx context.Context, key string) (string, string, err
 	return contentID, path, nil
 }
 
-func GetDevboxLvName(ctx context.Context, contentKey string, path string) (string, error) {
+func GetDevboxLvName(ctx context.Context, contentKey, key string) (string, error) {
 	var (
 		lvName string
 	)
@@ -747,8 +748,8 @@ func GetDevboxLvName(ctx context.Context, contentKey string, path string) (strin
 			return errdefs.ErrNotFound
 		}
 
-		if mountPath := sdbkt.Get(DevboxKeyPath); mountPath != nil && string(mountPath) != path {
-			return fmt.Errorf("devbox lv %s is already mounted at %s, check failed for path %s", contentKey, string(mountPath), path)
+		if snapshotKey := sdbkt.Get(DevboxKeySnapshotKey); snapshotKey != nil && string(snapshotKey) != key {
+			return fmt.Errorf("snapshot key for content key %s is already set to %s", contentKey, string(snapshotKey))
 		}
 
 		lvNameByte := sdbkt.Get(DevboxKeyLvName)
@@ -767,7 +768,7 @@ func GetDevboxLvName(ctx context.Context, contentKey string, path string) (strin
 
 func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) error {
 	if contentID == "" || lvName == "" || path == "" {
-		return fmt.Errorf("content key and storage path cannot be empty")
+		return fmt.Errorf("content key and lv name cannot be empty")
 	}
 
 	return withDevboxBucket(ctx, func(ctx context.Context, bkt *bolt.Bucket, dbkt *bolt.Bucket) error {
@@ -775,8 +776,7 @@ func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) 
 		if sbkt == nil {
 			return fmt.Errorf("snapshot key %s not found: %w", key, errdefs.ErrNotFound)
 		}
-		err := sbkt.Put(DevboxKeyContentID, []byte(contentID))
-		if err != nil {
+		if err := sbkt.Put(DevboxKeyContentID, []byte(contentID)); err != nil {
 			return fmt.Errorf("failed to set content ID for key %s: %w", key, err)
 		}
 		if err := sbkt.Put([]byte(DevboxKeyPath), []byte(path)); err != nil {
@@ -792,8 +792,8 @@ func SetDevboxContent(ctx context.Context, key, contentID, lvName, path string) 
 		if err := sdbkt.Put([]byte(DevboxKeyLvName), []byte(lvName)); err != nil {
 			return fmt.Errorf("failed to set lvname for content key %s: %w", contentID, err)
 		}
-		if err := sdbkt.Put([]byte(DevboxKeyPath), []byte(path)); err != nil {
-			return fmt.Errorf("failed to set devbox path for content key %s: %w", contentID, err)
+		if err := sdbkt.Put([]byte(DevboxKeySnapshotKey), []byte(key)); err != nil {
+			return fmt.Errorf("failed to set snapshot key for content key %s: %w", contentID, err)
 		}
 		if err := sdbkt.Put([]byte(DevboxKeyStatus), []byte(DevboxStatusActive)); err != nil {
 			return fmt.Errorf("failed to set status for content key %s: %w", contentID, err)
@@ -843,16 +843,13 @@ func SetUnmountedWithKey(ctx context.Context, key string) (string, error) {
 		if sdbkt == nil {
 			return fmt.Errorf("devbox storage path bucket for content ID %s does not exist: %w", string(contentID), errdefs.ErrNotFound)
 		}
-		if path := sdbkt.Get(DevboxKeyPath); path != nil {
-			if string(path) != mountPath {
-				return fmt.Errorf("new mount path for content ID %s does not match key %s, maybe it was mounted by other container", string(contentID), key)
-			}
-			if err := sdbkt.Delete(DevboxKeyPath); err != nil {
-				return fmt.Errorf("failed to delete mount path for content ID %s: %w", string(contentID), err)
+		if snapshotKey := sdbkt.Get(DevboxKeySnapshotKey); snapshotKey != nil {
+			if err := sdbkt.Delete(DevboxKeySnapshotKey); err != nil {
+				return fmt.Errorf("failed to delete snapshot key for content ID %s: %w", string(contentID), err)
 			}
 			return nil
 		}
-		return fmt.Errorf("mount path for content ID %s is not set, cannot set status to unmounted: %w", string(contentID), errdefs.ErrNotFound)
+		return fmt.Errorf("snapshot key for content ID %s is not set, cannot set status to unmounted: %w", string(contentID), errdefs.ErrNotFound)
 	})
 	if err != nil {
 		return "", err
@@ -891,9 +888,6 @@ func RemoveDevbox(ctx context.Context, Key string) (string, error) {
 			if string(status) == string(DevboxStatusRemoved) {
 				// remove the bucket if it is already marked as removed
 				dbkt.DeleteBucket([]byte(contentID))
-			} else {
-				// if the status is not removed, only remove the mount path
-				sdbkt.Delete([]byte(DevboxKeyPath))
 			}
 		}
 		return nil

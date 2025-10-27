@@ -85,9 +85,12 @@ func (c *criService) StopContainer(ctx context.Context, r *runtime.StopContainer
 
 	fmt.Println("Check snapshotter:", snapshotter)
 
-	err = c.client.UpdateDevboxSnapshot(ctx, snapshotter, i.ID, unmountLvm, "true")
-	if err != nil {
-		fmt.Println("Failed to update devbox snapshot:", err)
+	// Check if the snapshotter is devbox and update the devbox snapshot
+	if snapshotter == "devbox" {
+		err = c.client.UpdateDevboxSnapshot(ctx, snapshotter, i.ID, unmountLvm, "true")
+		if err != nil {
+			fmt.Println("Failed to update devbox snapshot:", err)
+		}
 	}
 
 	return &runtime.StopContainerResponse{}, nil
