@@ -318,15 +318,14 @@ func (o *Snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, 
 	if err := o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
 		var (
 			contentID string
-			path      string
 		)
 
-		contentID, path, err = storage.GetSnapshotDevboxInfo(ctx, key)
+		contentID, _, err = storage.GetSnapshotDevboxInfo(ctx, key)
 		if err != nil {
 			return fmt.Errorf("failed to get devbox content ID for snapshot %s: %w", key, err)
 		}
 		if contentID != "" {
-			lvName, err := storage.GetDevboxLvName(ctx, contentID, path)
+			lvName, err := storage.GetDevboxLvName(ctx, contentID, key)
 			if err != nil {
 				return fmt.Errorf("failed to get devbox logical volume name for content ID %s: %w", contentID, err)
 			}
@@ -736,7 +735,7 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 						return fmt.Errorf("failed to resize LVM logical volume %s: %w", lvName, err)
 					}
 
-					if err = storage.SetDevboxContent(ctx, key, contentId, lvName, npath, key); err != nil {
+					if err = storage.SetDevboxContent(ctx, key, contentId, lvName, npath); err != nil {
 						return fmt.Errorf("failed to set devbox content: %w", err)
 					}
 
@@ -794,7 +793,7 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			}
 
 			log.G(ctx).Debug("Prepared LVM directory for snapshot:", td, "with logical volume name:", lvName)
-			if err = storage.SetDevboxContent(ctx, key, contentId, lvName, npath, key); err != nil {
+			if err = storage.SetDevboxContent(ctx, key, contentId, lvName, npath); err != nil {
 				return fmt.Errorf("failed to set devbox content: %w", err)
 			}
 		} else {
