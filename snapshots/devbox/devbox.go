@@ -763,12 +763,14 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 				return fmt.Errorf("failed to get LVM logical volume name for key %s: %w", contentId, notExistErr)
 			}
 
+			td, lvName, err = o.prepareLvmDirectory(ctx, snapshotDir, contentId, useLimit)
+
 			// remove devbox metadata if new lv is created
 			defer func() {
-				if err != nil {
-					// unmark lv
+				if lvName != "" {
 					o.unmarkLV(lvName)
-
+				}
+				if err != nil {
 					// cleanup lv
 					mountPath, err := storage.RemoveDevbox(ctx, key)
 					if err != nil {
@@ -782,9 +784,8 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 				}
 			}()
 
-			td, lvName, err = o.prepareLvmDirectory(ctx, snapshotDir, contentId, useLimit)
 			if err != nil {
-				o.unmarkLV(lvName)
+				// o.unmarkLV(lvName)
 				return fmt.Errorf("failed to prepare LVM directory for snapshot: %w", err)
 			}
 
@@ -866,11 +867,6 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, err
 	}
 
-	// transaction end, unmark lv
-	if lvName != "" {
-		o.unmarkLV(lvName)
-	}
-
 	return o.mounts(s), nil
 }
 
@@ -945,12 +941,12 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 
 	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create temp dir: %w", err)
+		return "", lvName, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
 	capacity, err := parseUseLimit(useLimit)
 	if err != nil {
-		return td, "", fmt.Errorf("failed to parse use limit %s: %w", useLimit, err)
+		return td, lvName, fmt.Errorf("failed to parse use limit %s: %w", useLimit, err)
 	}
 
 	vol := &apis.LVMVolume{
@@ -966,7 +962,7 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 	log.G(ctx).Debug("Creating LVM volume:", lvName, "with capacity:", capacity, "in volume group:", o.lvmVgName)
 	err = lvm.CreateVolume(vol)
 	if err != nil {
-		return td, "", fmt.Errorf("failed to create LVM logical volume %s: %w", lvName, err)
+		return td, lvName, fmt.Errorf("failed to create LVM logical volume %s: %w", lvName, err)
 	}
 
 	err = o.mkfs(lvName)
@@ -975,7 +971,7 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 		if err1 := o.removeLv(lvName); err1 != nil {
 			log.G(ctx).WithError(err1).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume after mkfs failure")
 		}
-		return td, "", fmt.Errorf("failed to create filesystem on LVM logical volume %s: %w", lvName, err)
+		return td, lvName, fmt.Errorf("failed to create filesystem on LVM logical volume %s: %w", lvName, err)
 	}
 	err = o.mountLvm(ctx, lvName, td)
 	if err != nil {
@@ -983,13 +979,13 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 		if err1 := o.removeLv(lvName); err1 != nil {
 			log.G(ctx).WithError(err1).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume after mount failure")
 		}
-		return td, "", fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
+		return td, lvName, fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
 	}
 	if err := os.Mkdir(filepath.Join(td, "fs"), 0755); err != nil {
-		return td, "", fmt.Errorf("failed to create fs directory: %w", err)
+		return td, lvName, fmt.Errorf("failed to create fs directory: %w", err)
 	}
 	if err := os.Mkdir(filepath.Join(td, "work"), 0711); err != nil {
-		return td, "", fmt.Errorf("failed to create work directory: %w", err)
+		return td, lvName, fmt.Errorf("failed to create work directory: %w", err)
 	}
 
 	return td, lvName, nil
