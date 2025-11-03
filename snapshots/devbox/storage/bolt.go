@@ -888,6 +888,11 @@ func RemoveDevbox(ctx context.Context, Key string) (string, error) {
 			if string(status) == string(DevboxStatusRemoved) {
 				// remove the bucket if it is already marked as removed
 				dbkt.DeleteBucket([]byte(contentID))
+			} else {
+				snapshotKey := sdbkt.Get(DevboxKeySnapshotKey)
+				if string(snapshotKey) == Key {
+					sdbkt.Delete(DevboxKeySnapshotKey)
+				}
 			}
 		}
 		return nil
