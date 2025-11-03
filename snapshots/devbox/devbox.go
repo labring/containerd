@@ -867,6 +867,11 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, err
 	}
 
+	// transaction end, unmark lv
+	if lvName != "" {
+		o.unmarkLV(lvName)
+	}
+
 	return o.mounts(s), nil
 }
 
