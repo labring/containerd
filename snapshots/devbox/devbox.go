@@ -460,34 +460,32 @@ func (o *Snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 // Cleanup cleans up disk resources from removed or abandoned snapshots
 func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	log.G(ctx).Infof("Cleanup called")
-	return o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
-		cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
+	cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, dir := range cleanup {
+		// modified by sealos
+		if err := o.unmountLvm(ctx, dir); err != nil {
+			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
+		}
+		// end modified by sealos
+		if err := os.RemoveAll(dir); err != nil {
+			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+		}
+	}
+
+	for _, lvName := range cleanupLv {
+		err := o.removeLv(lvName)
 		if err != nil {
-			return err
+			log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
+			continue
 		}
+		log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+	}
 
-		for _, dir := range cleanup {
-			// modified by sealos
-			if err := o.unmountLvm(ctx, dir); err != nil {
-				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
-			}
-			// end modified by sealos
-			if err := os.RemoveAll(dir); err != nil {
-				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
-			}
-		}
-
-		for _, lvName := range cleanupLv {
-			err := o.removeLv(lvName)
-			if err != nil {
-				log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
-				continue
-			}
-			log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
-		}
-
-		return nil
-	})
+	return nil
 }
 
 func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []string, err error) {
@@ -497,12 +495,21 @@ func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []s
 	)
 	// Get a write transaction to ensure no other write transaction can be entered
 	// while the cleanup is scanning.
-	cleanupDirs, err = o.getCleanupDirectories(ctx)
-	if err != nil {
+	if err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+		cleanupDirs, err = o.getCleanupDirectories(ctx)
+		if err != nil {
+			return err
+		}
+		removedLvNames, err = o.getCleanupLvNames(ctx)
+		if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, nil, err
 	}
-	removedLvNames, err = o.getCleanupLvNames(ctx)
-	return cleanupDirs, removedLvNames, err
+
+	return cleanupDirs, removedLvNames, nil
 }
 
 func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
