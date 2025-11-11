@@ -378,30 +378,31 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	// Remove directories after the transaction is closed, failures must not
 	// return error since the transaction is committed with the removal
 	// key no longer available.
-	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
-		// modified by sealos
-		defer func() {
-			if err == nil {
-				for _, dir := range removals {
-					// modified by sealos
-					if err1 := o.unmountLvm(ctx, dir); err1 != nil {
-						log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
-					}
-					// end modified by sealos
-					if err1 := os.RemoveAll(dir); err1 != nil {
-						log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
-					}
+	defer func() {
+		if err == nil {
+			for _, dir := range removals {
+				// modified by sealos
+				if err1 := o.unmountLvm(ctx, dir); err1 != nil {
+					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
 				}
-				for _, lvName := range removedLvNames {
-					err := o.removeLv(lvName)
-					if err != nil {
-						log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
-						continue
-					}
-					log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+				// end modified by sealos
+				if err1 := os.RemoveAll(dir); err1 != nil {
+					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
 				}
 			}
-		}()
+			for _, lvName := range removedLvNames {
+				err := o.removeLv(lvName)
+				if err != nil {
+					log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
+					continue
+				}
+				log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+			}
+		}
+	}()
+
+	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+		// modified by sealos
 		var mountPath string
 		mountPath, err = storage.RemoveDevbox(ctx, key)
 		log.G(ctx).Infof("Removed devbox content for key: %s, mount path: %s", key, mountPath)
@@ -835,11 +836,11 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 				return fmt.Errorf("failed to unmount LVM logical volume %s: %w", lvName, err)
 			}
 			log.G(ctx).Debug("Unmounted LVM logical volume:", lvName, "from temporary directory:", td)
-			if err = os.MkdirAll(npath, 0755); err != nil {
-				return fmt.Errorf("failed to create snapshot directory: %w", err)
+			if err = os.Rename(td, npath); err != nil {
+				return fmt.Errorf("failed to rename: %w", err)
 			}
 			path = npath
-			log.G(ctx).Debug("Created snapshot directory:", path)
+			log.G(ctx).Debug("Renamed temporary directory to snapshot directory:", path)
 			err = o.mountLvm(ctx, lvName, path)
 			if err != nil {
 				return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
