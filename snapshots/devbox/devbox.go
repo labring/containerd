@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	cp "github.com/otiai10/copy"
@@ -139,8 +138,6 @@ type Snapshotter struct {
 	ThinPoolName  string
 	UseThinPool   bool
 	options       []string
-	lvMapMu       sync.RWMutex
-	lvMap         map[string]struct{} // mark creating lv
 }
 
 // NewSnapshotter returns a Snapshotter which uses overlayfs. The overlayfs
@@ -198,8 +195,6 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 		lvmVgName:     config.lvmVgName, // modified by sealos
 		ThinPoolName:  config.ThinPoolName,
 		options:       config.mountOptions,
-		lvMap:         make(map[string]struct{}),
-		lvMapMu:       sync.RWMutex{},
 	}, nil
 }
 
@@ -560,12 +555,6 @@ func (o *Snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
 			continue
 		}
 
-		// Check if lv is creating
-		if isCreating := o.isLVCreating(d.Name); isCreating {
-			log.G(ctx).Infof("LVM logical volume %s is being created, skipping cleanup", d.Name)
-			continue
-		}
-
 		// Check if the name start with devbox
 		if strings.HasPrefix(d.Name, "devbox") {
 			cleanup = append(cleanup, d.Name)
@@ -774,9 +763,6 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 			// remove devbox metadata if new lv is created
 			defer func() {
-				if lvName != "" {
-					o.unmarkLV(lvName)
-				}
 				if err != nil {
 					// cleanup lv
 					mountPath, err := storage.RemoveDevbox(ctx, key)
@@ -792,7 +778,6 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			}()
 
 			if err != nil {
-				// o.unmarkLV(lvName)
 				return fmt.Errorf("failed to prepare LVM directory for snapshot: %w", err)
 			}
 
@@ -943,9 +928,6 @@ func (o *Snapshotter) removeLv(lvName string) error {
 func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir string, contentKey string, useLimit string) (string, string, error) {
 	lvName := "devbox-" + contentKey
 
-	// mark lv for creating
-	o.markLV(lvName)
-
 	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
 		return "", lvName, fmt.Errorf("failed to create temp dir: %w", err)
@@ -1065,28 +1047,6 @@ func (o *Snapshotter) workPath(id string) string {
 // Close closes the snapshotter
 func (o *Snapshotter) Close() error {
 	return o.ms.Close()
-}
-
-// markLV marks the LVM logical volume as being created
-func (o *Snapshotter) markLV(lvName string) {
-	o.lvMapMu.Lock()
-	o.lvMap[lvName] = struct{}{}
-	o.lvMapMu.Unlock()
-}
-
-// unmarkLV marks the LVM logical volume as not being created
-func (o *Snapshotter) unmarkLV(lvName string) {
-	o.lvMapMu.Lock()
-	delete(o.lvMap, lvName)
-	o.lvMapMu.Unlock()
-}
-
-// isLVCreating checks if the LVM logical volume is being created
-func (o *Snapshotter) isLVCreating(lvName string) bool {
-	o.lvMapMu.RLock()
-	_, exists := o.lvMap[lvName]
-	o.lvMapMu.RUnlock()
-	return exists
 }
 
 // supportsIndex checks whether the "index=off" option is supported by the kernel.
