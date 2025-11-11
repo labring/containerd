@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	cp "github.com/otiai10/copy"
@@ -139,8 +138,6 @@ type Snapshotter struct {
 	ThinPoolName  string
 	UseThinPool   bool
 	options       []string
-	lvMapMu       sync.RWMutex
-	lvMap         map[string]struct{} // mark creating lv
 }
 
 // NewSnapshotter returns a Snapshotter which uses overlayfs. The overlayfs
@@ -198,8 +195,6 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
 		lvmVgName:     config.lvmVgName, // modified by sealos
 		ThinPoolName:  config.ThinPoolName,
 		options:       config.mountOptions,
-		lvMap:         make(map[string]struct{}),
-		lvMapMu:       sync.RWMutex{},
 	}, nil
 }
 
@@ -383,30 +378,31 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	// Remove directories after the transaction is closed, failures must not
 	// return error since the transaction is committed with the removal
 	// key no longer available.
-	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
-		// modified by sealos
-		defer func() {
-			if err == nil {
-				for _, dir := range removals {
-					// modified by sealos
-					if err1 := o.unmountLvm(ctx, dir); err1 != nil {
-						log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
-					}
-					// end modified by sealos
-					if err1 := os.RemoveAll(dir); err1 != nil {
-						log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
-					}
+	defer func() {
+		if err == nil {
+			for _, dir := range removals {
+				// modified by sealos
+				if err1 := o.unmountLvm(ctx, dir); err1 != nil {
+					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
 				}
-				for _, lvName := range removedLvNames {
-					err := o.removeLv(lvName)
-					if err != nil {
-						log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
-						continue
-					}
-					log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+				// end modified by sealos
+				if err1 := os.RemoveAll(dir); err1 != nil {
+					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
 				}
 			}
-		}()
+			for _, lvName := range removedLvNames {
+				err := o.removeLv(lvName)
+				if err != nil {
+					log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
+					continue
+				}
+				log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+			}
+		}
+	}()
+
+	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+		// modified by sealos
 		var mountPath string
 		mountPath, err = storage.RemoveDevbox(ctx, key)
 		log.G(ctx).Infof("Removed devbox content for key: %s, mount path: %s", key, mountPath)
@@ -460,34 +456,32 @@ func (o *Snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 // Cleanup cleans up disk resources from removed or abandoned snapshots
 func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	log.G(ctx).Infof("Cleanup called")
-	return o.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
-		cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
+	cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, dir := range cleanup {
+		// modified by sealos
+		if err := o.unmountLvm(ctx, dir); err != nil {
+			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
+		}
+		// end modified by sealos
+		if err := os.RemoveAll(dir); err != nil {
+			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+		}
+	}
+
+	for _, lvName := range cleanupLv {
+		err := o.removeLv(lvName)
 		if err != nil {
-			return err
+			log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
+			continue
 		}
+		log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
+	}
 
-		for _, dir := range cleanup {
-			// modified by sealos
-			if err := o.unmountLvm(ctx, dir); err != nil {
-				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
-			}
-			// end modified by sealos
-			if err := os.RemoveAll(dir); err != nil {
-				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
-			}
-		}
-
-		for _, lvName := range cleanupLv {
-			err := o.removeLv(lvName)
-			if err != nil {
-				log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("failed to destroy LVM logical volume")
-				continue
-			}
-			log.G(ctx).Infof("LVM logical volume %s removed successfully", lvName)
-		}
-
-		return nil
-	})
+	return nil
 }
 
 func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []string, err error) {
@@ -497,12 +491,21 @@ func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []s
 	)
 	// Get a write transaction to ensure no other write transaction can be entered
 	// while the cleanup is scanning.
-	cleanupDirs, err = o.getCleanupDirectories(ctx)
-	if err != nil {
+	if err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+		cleanupDirs, err = o.getCleanupDirectories(ctx)
+		if err != nil {
+			return err
+		}
+		removedLvNames, err = o.getCleanupLvNames(ctx)
+		if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, nil, err
 	}
-	removedLvNames, err = o.getCleanupLvNames(ctx)
-	return cleanupDirs, removedLvNames, err
+
+	return cleanupDirs, removedLvNames, nil
 }
 
 func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
@@ -550,12 +553,6 @@ func (o *Snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
 	cleanup := []string{}
 	for _, d := range lvs {
 		if _, ok := nameMap[d.Name]; ok {
-			continue
-		}
-
-		// Check if lv is creating
-		if isCreating := o.isLVCreating(d.Name); isCreating {
-			log.G(ctx).Infof("LVM logical volume %s is being created, skipping cleanup", d.Name)
 			continue
 		}
 
@@ -767,9 +764,6 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 			// remove devbox metadata if new lv is created
 			defer func() {
-				if lvName != "" {
-					o.unmarkLV(lvName)
-				}
 				if err != nil {
 					// cleanup lv
 					mountPath, err := storage.RemoveDevbox(ctx, key)
@@ -785,7 +779,6 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			}()
 
 			if err != nil {
-				// o.unmarkLV(lvName)
 				return fmt.Errorf("failed to prepare LVM directory for snapshot: %w", err)
 			}
 
@@ -843,11 +836,11 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 				return fmt.Errorf("failed to unmount LVM logical volume %s: %w", lvName, err)
 			}
 			log.G(ctx).Debug("Unmounted LVM logical volume:", lvName, "from temporary directory:", td)
-			if err = os.MkdirAll(npath, 0755); err != nil {
-				return fmt.Errorf("failed to create snapshot directory: %w", err)
+			if err = os.Rename(td, npath); err != nil {
+				return fmt.Errorf("failed to rename: %w", err)
 			}
 			path = npath
-			log.G(ctx).Debug("Created snapshot directory:", path)
+			log.G(ctx).Debug("Renamed temporary directory to snapshot directory:", path)
 			err = o.mountLvm(ctx, lvName, path)
 			if err != nil {
 				return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
@@ -935,9 +928,6 @@ func (o *Snapshotter) removeLv(lvName string) error {
 
 func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir string, contentKey string, useLimit string) (string, string, error) {
 	lvName := "devbox-" + contentKey
-
-	// mark lv for creating
-	o.markLV(lvName)
 
 	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
@@ -1058,28 +1048,6 @@ func (o *Snapshotter) workPath(id string) string {
 // Close closes the snapshotter
 func (o *Snapshotter) Close() error {
 	return o.ms.Close()
-}
-
-// markLV marks the LVM logical volume as being created
-func (o *Snapshotter) markLV(lvName string) {
-	o.lvMapMu.Lock()
-	o.lvMap[lvName] = struct{}{}
-	o.lvMapMu.Unlock()
-}
-
-// unmarkLV marks the LVM logical volume as not being created
-func (o *Snapshotter) unmarkLV(lvName string) {
-	o.lvMapMu.Lock()
-	delete(o.lvMap, lvName)
-	o.lvMapMu.Unlock()
-}
-
-// isLVCreating checks if the LVM logical volume is being created
-func (o *Snapshotter) isLVCreating(lvName string) bool {
-	o.lvMapMu.RLock()
-	_, exists := o.lvMap[lvName]
-	o.lvMapMu.RUnlock()
-	return exists
 }
 
 // supportsIndex checks whether the "index=off" option is supported by the kernel.
