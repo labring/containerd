@@ -32,7 +32,7 @@ TEST_IMAGE_LIST ?=
 # Used to populate variables in version package.
 VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
-PACKAGE=github.com/containerd/containerd
+PACKAGE=github.com/labring/containerd
 SHIM_CGO_ENABLED ?= 0
 
 ifneq "$(strip $(shell command -v $(GO) 2>/dev/null))" ""
