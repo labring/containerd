@@ -612,7 +612,7 @@ func generateUserString(username string, uid, gid *runtime.Int64Value) (string, 
 
 // use SEALOS_DEVBOX_UID to set the uid of the container
 // we don't use pod annotations or labels because it will cause circular dependency
-const devboxUidEnvKey = "devbox.sealos.io/uid"
+const devboxUIDEnvKey = "devbox.sealos.io/uid"
 
 // snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
 func snapshotterOpts(snapshotterName string, config *runtime.ContainerConfig, sandboxConfig *runtime.PodSandboxConfig) ([]snapshots.Opt, error) {
@@ -621,7 +621,7 @@ func snapshotterOpts(snapshotterName string, config *runtime.ContainerConfig, sa
 	if err != nil {
 		return nil, err
 	}
-	uid := sandboxConfig.Annotations[devboxUidEnvKey]
+	uid := sandboxConfig.Annotations[devboxUIDEnvKey]
 	if uid != "" {
 		snapshotOpts = append(snapshotOpts, snapshots.WithLabels(map[string]string{
 			"devbox.sealos.io/uid": uid,
