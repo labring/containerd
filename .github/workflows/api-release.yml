@@ -25,21 +25,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
-          path: src/github.com/containerd/containerd
+          # check out to the repository root (workspace) so forks don't depend on upstream paths
+          path: .
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Check signature
         run: |
           releasever=${{ github.ref }}
           releasever="${releasever#refs/tags/}"
-          TAGCHECK=$(git tag -v ${releasever} 2>&1 >/dev/null) ||
-          echo "${TAGCHECK}" | grep -q "error" && {
+          # Only enforce strict signature verification when running in the canonical upstream repository.
+          # For forks, skip strict GPG verification because CI may not have the public keys.
+          if [ "${{ github.repository }}" = "containerd/containerd" ]; then
+            if ! git tag -v "${releasever}"; then
               echo "::error::tag ${releasever} is not a signed tag. Failing release process."
               exit 1
-          } || {
-              echo "Tag ${releasever} is signed."
-              exit 0
-          }
-        working-directory: src/github.com/containerd/containerd
+            fi
+            echo "Tag ${releasever} is signed."
+          else
+            echo "Running in fork (${GITHUB_REPOSITORY}); skipping strict tag signature verification."
+          fi
+        working-directory: .
 
       - name: Release content
         id: contentrel
@@ -47,13 +53,13 @@ jobs:
           RELEASEVER=${{ github.ref }}
           echo "stringver=${RELEASEVER#refs/tags/api/v}" >> $GITHUB_OUTPUT
           git tag -l ${RELEASEVER#refs/tags/} -n20000 | tail -n +3 | cut -c 5- >release-notes.md
-        working-directory: src/github.com/containerd/containerd
+        working-directory: .
 
       - name: Save release notes
         uses: actions/upload-artifact@v4
         with:
           name: containerd-release-notes
-          path: src/github.com/containerd/containerd/release-notes.md
+          path: release-notes.md
 
   release:
     name: Create containerd Release
@@ -68,7 +74,29 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: builds
-      - name: Create Release
+      - name: Prepare release token check
+        id: tokencheck
+        run: |
+          # Determine whether a RELEASE_TOKEN secret is provided; expose result as an output
+          if [ -n "${{ secrets.RELEASE_TOKEN }}" ]; then
+            echo "use_release_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "use_release_token=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Create Release (with RELEASE_TOKEN)
+        if: ${{ steps.tokencheck.outputs.use_release_token == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          fail_on_unmatched_files: true
+          name: containerd API ${{ needs.check.outputs.stringver }}
+          draft: false
+          make_latest: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          body_path: ./builds/containerd-release-notes/release-notes.md
+
+      - name: Create Release (with GITHUB_TOKEN)
+        if: ${{ steps.tokencheck.outputs.use_release_token == 'false' }}
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

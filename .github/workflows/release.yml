@@ -32,21 +32,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
-          path: src/github.com/containerd/containerd
+          path: .
 
       - name: Check signature
         run: |
           releasever=${{ github.ref }}
           releasever="${releasever#refs/tags/}"
-          TAGCHECK=$(git tag -v ${releasever} 2>&1 >/dev/null) ||
-          echo "${TAGCHECK}" | grep -q "error" && {
+          # Only enforce strict signature verification when running in the canonical upstream repository.
+          # For forks, skip strict GPG verification because CI may not have the public keys.
+          if [ "${{ github.repository }}" = "containerd/containerd" ]; then
+            if ! git tag -v "${releasever}"; then
               echo "::error::tag ${releasever} is not a signed tag. Failing release process."
               exit 1
-          } || {
-              echo "Tag ${releasever} is signed."
-              exit 0
-          }
-        working-directory: src/github.com/containerd/containerd
+            fi
+            echo "Tag ${releasever} is signed."
+          else
+            echo "Running in fork (${GITHUB_REPOSITORY}); skipping strict tag signature verification."
+          fi
+        working-directory: .
 
       - name: Release content
         id: contentrel
@@ -54,13 +57,13 @@ jobs:
           RELEASEVER=${{ github.ref }}
           echo "stringver=${RELEASEVER#refs/tags/v}" >> $GITHUB_OUTPUT
           git tag -l ${RELEASEVER#refs/tags/} -n20000 | tail -n +3 | cut -c 5- >release-notes.md
-        working-directory: src/github.com/containerd/containerd
+        working-directory: .
 
       - name: Save release notes
         uses: actions/upload-artifact@v4
         with:
           name: containerd-release-notes
-          path: src/github.com/containerd/containerd/release-notes.md
+          path: release-notes.md
 
   build:
     name: Build Release Binaries
@@ -100,7 +103,7 @@ jobs:
           # See https://github.com/containerd/containerd/issues/5098 for the context.
           repository: ${{ github.repository }}
           ref: ${{ github.ref }}
-          path: src/github.com/containerd/containerd
+          path: .
 
       - name: Setup buildx instance
         uses: docker/setup-buildx-action@v3
@@ -123,14 +126,14 @@ jobs:
 
           # Remove symlinks since we don't want these in the release Artifacts
           find ./releases/ -maxdepth 1 -type l | xargs rm
-        working-directory: src/github.com/containerd/containerd
+        working-directory: .
         env:
           PLATFORM: ${{ matrix.dockerfile-platform }}
       - name: Save Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-tars-${{env.PLATFORM_CLEAN}}
-          path: src/github.com/containerd/containerd/releases/*.tar.gz*
+          path: releases/*.tar.gz*
 
   release:
     name: Create containerd Release
