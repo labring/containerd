@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/content"
@@ -229,7 +230,23 @@ func WithNewSnapshot(id string, i Image, opts ...snapshots.Opt) NewContainerOpts
 		if err != nil {
 			return err
 		}
-		if _, err := s.Prepare(ctx, id, parent, opts...); err != nil {
+		base := snapshots.Info{}
+		for _, opt := range opts {
+			if err := opt(&base); err != nil {
+				return fmt.Errorf("error applying snapshot option: %w", err)
+			}
+		}
+		start_opts := []snapshots.Opt{}
+		for label, value := range base.Labels {
+			// if label start with "devbox.sealos.io/", transform it to "containerd.io/snapshot/"
+			if strings.HasPrefix(label, "devbox.sealos.io/") {
+				start_opts = append(start_opts, snapshots.WithLabels(map[string]string{
+					"containerd.io/snapshot/devbox-" + label[len("devbox.sealos.io/"):]: value,
+				}))
+			}
+		}
+		start_opts = append(start_opts, opts...)
+		if _, err := s.Prepare(ctx, id, parent, start_opts...); err != nil {
 			return err
 		}
 		c.SnapshotKey = id

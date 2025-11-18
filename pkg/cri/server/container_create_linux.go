@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -608,6 +609,15 @@ func generateUserString(username string, uid, gid *runtime.Int64Value) (string, 
 		userstr = userstr + ":" + groupstr
 	}
 	return userstr, nil
+}
+
+// snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
+func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
+	// fmt.Printf("devboxSnapshotterOpts: snapshotterName=%s, config=%+v\n", snapshotterName, config)
+	// add container annotations to snapshot labels
+	labels := make(map[string]string)
+	maps.Copy(labels, config.Annotations)
+	return snapshots.WithLabels(labels), nil
 }
 
 // use SEALOS_DEVBOX_UID to set the uid of the container
