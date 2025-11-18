@@ -30,7 +30,14 @@ MANDIR        ?= $(DATADIR)/man
 TEST_IMAGE_LIST ?=
 
 # Used to populate variables in version package.
-VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always)
+# Derive a short `DIST` label from the branch when appropriate and
+# safely insert it as build metadata into `VERSION` when present.
+# - branch `release/v1.7-labring` -> DIST=labring
+# - branch `v1.7` or `release/v1.7` -> DIST empty
+# Use compact single-line shell expressions (awk) to avoid quoting issues.
+DIST := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | awk -F- '/^release\//{print $$NF; next} /^v[0-9]/ && NF>1{print $$NF}' || true)
+
+VERSION ?= $(shell ver=$$(git describe --match 'v[0-9]*' --dirty='.m' --always 2>/dev/null || echo v0.0.0); if [ -n "$(DIST)" ]; then echo "$$ver" | awk -v d="$(DIST)" '{sub(/^v[0-9]+(\.[0-9]+)*/, "&+"d); print}'; else echo "$$ver"; fi)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
 PACKAGE=github.com/labring/containerd
 SHIM_CGO_ENABLED ?= 0
