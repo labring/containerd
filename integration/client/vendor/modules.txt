@@ -486,4 +486,7 @@ google.golang.org/protobuf/types/known/timestamppb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
+# k8s.io/apimachinery v0.27.2 => k8s.io/apimachinery v0.24.17
+# k8s.io/client-go => k8s.io/client-go v0.26.2
+# k8s.io/api => k8s.io/api v0.26.2
 # github.com/containerd/containerd => ../../

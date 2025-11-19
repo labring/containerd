@@ -78,4 +78,10 @@ require (
 // IMPORTANT: this replace rule ONLY replaces containerd itself; dependencies
 // in the "require" section above are still taken into account for version
 // resolution if newer.
+replace k8s.io/apimachinery v0.27.2 => k8s.io/apimachinery v0.24.17
+
+replace k8s.io/client-go => k8s.io/client-go v0.26.2
+
+replace k8s.io/api => k8s.io/api v0.26.2
+
 replace github.com/containerd/containerd => ../../
