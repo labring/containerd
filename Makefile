@@ -30,14 +30,26 @@ MANDIR        ?= $(DATADIR)/man
 TEST_IMAGE_LIST ?=
 
 # Used to populate variables in version package.
-# Derive a short `DIST` label from the branch when appropriate and
-# safely insert it as build metadata into `VERSION` when present.
-# - branch `release/v1.7-labring` -> DIST=labring
-# - branch `v1.7` or `release/v1.7` -> DIST empty
-# Use compact single-line shell expressions (awk) to avoid quoting issues.
-DIST := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | awk -F- '/^release\//{print $$NF; next} /^v[0-9]/ && NF>1{print $$NF}' || true)
+#
+# Derive a short `DIST` label from the current branch when appropriate and
+# insert it as semver build metadata (`+<dist>`) into `VERSION` only when
+# a label is present and `git describe` does not already include build metadata.
+# Behavior and examples:
+# - branch `release/1.7+labring`  -> DIST=`labring`  -> VERSION becomes `v1.7.27+labring-...`
+# - branch `release/v1.7-labring` -> DIST=`labring`  -> (legacy `-` format supported)
+# - branch `v1.7+labring`         -> DIST=`labring`  -> VERSION becomes `v1.7.27+labring-...`
+# - branch `v1.7` or `release/v1.7` -> DIST empty     -> VERSION unchanged (no `+` added)
+#
+# Notes:
+# - If `git describe` itself already contains a `+` (build metadata), no extra
+#   `+DIST` will be inserted to avoid duplicate build metadata.
+# - The extraction prefers the `+` separator (new format) and falls back to
+#   `-` for older branch names (for backward compatibility).
+# - In detached HEAD or CI checkouts where a branch name is not available,
+#   `DIST` will be empty and no build metadata will be added.
+DIST := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | awk '{b=$$0; if (b=="") {print ""; exit} if (index(b,"+")>0) { n=split(b,a,"+"); print a[n]; exit } if (substr(b,1,8)=="release/" && index(b,"-")>0) { n=split(b,a,"-"); print a[n]; exit } if (substr(b,1,1)=="v" && index(b,"-")>0) { n=split(b,a,"-"); print a[n]; exit } print "" }' || true)
 
-VERSION ?= $(shell ver=$$(git describe --match 'v[0-9]*' --dirty='.m' --always 2>/dev/null || echo v0.0.0); if [ -n "$(DIST)" ]; then echo "$$ver" | awk -v d="$(DIST)" '{sub(/^v[0-9]+(\.[0-9]+)*/, "&+"d); print}'; else echo "$$ver"; fi)
+VERSION ?= $(shell ver=$$(git describe --match 'v[0-9]*' --dirty='.m' --always 2>/dev/null || echo v0.0.0); if [ -n "$(DIST)" ]; then if echo "$$ver" | grep -q '+'; then echo "$$ver"; else echo "$$ver" | awk -v d="$(DIST)" '{sub(/^v[0-9]+(\.[0-9]+)*/, "&+"d); print}'; fi; else echo "$$ver"; fi)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
 PACKAGE=github.com/labring/containerd
 SHIM_CGO_ENABLED ?= 0
