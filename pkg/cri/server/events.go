@@ -443,6 +443,17 @@ func handleContainerExit(ctx context.Context, e *eventtypes.TaskExit, cntr conta
 			status.Pid = 0
 			status.FinishedAt = protobuf.FromTimestamp(e.ExitedAt).UnixNano()
 			status.ExitCode = int32(e.ExitStatus)
+			container, err := c.client.ContainerService().Get(ctx, cntr.Container.ID())
+			if err != nil {
+				return status, err
+			}
+			fmt.Println("Container snapshotter:", container.Snapshotter, "ID:", cntr.Container.ID())
+			if container.Snapshotter == "devbox" {
+				err = c.client.UpdateDevboxSnapshot(ctx, container.Snapshotter, container.ID, unmountLvm, "true")
+				if err != nil {
+					logrus.WithError(err).Errorf("Failed to update devbox snapshot for container %s", cntr.Container.ID())
+				}
+			}
 		}
 
 		// Unknown state can only transit to EXITED state, so we need
