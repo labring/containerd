@@ -192,9 +192,9 @@ protos: bin/protoc-gen-go-fieldpath
 	@echo "$(WHALE) $@"
 	@find . -path ./vendor -prune -false -o -name '*.pb.go' -exec rm -f {} +
 	$(eval TMPDIR := $(shell mktemp -d))
-	@sed "s|before = \[\"\./\",|before = [\"$(ROOTDIR)\",|" Protobuild.toml > $(TMPDIR)/Protobuild.toml
+	@sed "s|before = \[\"\./protobuf\", \"\./vendor\"\]|before = [\"$(ROOTDIR)\", \"./protobuf\", \"./vendor\"]|" Protobuild.toml > $(TMPDIR)/Protobuild.toml
 	@(PATH="${ROOTDIR}/bin:${PATH}" protobuild -f $(TMPDIR)/Protobuild.toml --quiet ${NON_API_PACKAGES})
-	PATH="${ROOTDIR}/bin:${PATH}" go-fix-acronym -w -a '(Id|Io|Uuid|Os)$$' $(shell find runtime/ -name '*.pb.go')
+	@(PATH="${ROOTDIR}/bin:${PATH}" go-fix-acronym -w -a '(Id|Io|Uuid|Os)$$' $(shell find runtime/ -name '*.pb.go'))
 
 check-protos: protos ## check if protobufs needs to be generated again
 	@echo "$(WHALE) $@"
