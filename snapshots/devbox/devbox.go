@@ -365,6 +365,29 @@ func (o *Snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 	})
 }
 
+func (o *Snapshotter) RemoveDir(ctx context.Context, dir string) {
+	isMounted, err := isMountPoint(dir)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to check if path is a mount point")
+		return
+	}
+	if isMounted {
+		if err1 := o.unmountLvm(ctx, dir); err1 != nil {
+			log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
+			return
+		}
+		if err1 := os.Remove(dir); err1 != nil {
+			log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
+			return
+		}
+	} else {
+		if err1 := os.RemoveAll(dir); err1 != nil {
+			log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
+			return
+		}
+	}
+}
+
 // Remove abandons the snapshot identified by key. The snapshot will
 // immediately become unavailable and unrecoverable. Disk space will
 // be freed up on the next call to `Cleanup`.
@@ -381,14 +404,7 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	defer func() {
 		if err == nil {
 			for _, dir := range removals {
-				// modified by sealos
-				if err1 := o.unmountLvm(ctx, dir); err1 != nil {
-					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to unmount directory")
-				}
-				// end modified by sealos
-				if err1 := os.RemoveAll(dir); err1 != nil {
-					log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
-				}
+				o.RemoveDir(ctx, dir)
 			}
 			for _, lvName := range removedLvNames {
 				err := o.removeLv(lvName)
@@ -462,14 +478,7 @@ func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	}
 
 	for _, dir := range cleanup {
-		// modified by sealos
-		if err := o.unmountLvm(ctx, dir); err != nil {
-			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to unmount directory")
-		}
-		// end modified by sealos
-		if err := os.RemoveAll(dir); err != nil {
-			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
-		}
+		o.RemoveDir(ctx, dir)
 	}
 
 	for _, lvName := range cleanupLv {
@@ -673,21 +682,10 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	defer func() {
 		if err != nil {
 			if td != "" {
-				if err1 := o.unmountLvm(ctx, td); err1 != nil {
-					log.G(ctx).WithError(err1).Warn("failed to unmount temp snapshot directory")
-				}
-				if err1 := os.RemoveAll(td); err1 != nil {
-					log.G(ctx).WithError(err1).Warn("failed to cleanup temp snapshot directory")
-				}
+				o.RemoveDir(ctx, td)
 			}
 			if path != "" {
-				if err1 := o.unmountLvm(ctx, path); err1 != nil {
-					log.G(ctx).WithError(err1).WithField("path", path).Warn("failed to unmount snapshot directory")
-				}
-				if err1 := os.RemoveAll(path); err1 != nil {
-					log.G(ctx).WithError(err1).WithField("path", path).Error("failed to reclaim snapshot directory, directory may need removal")
-					err = fmt.Errorf("failed to remove path: %v: %w", err1, err)
-				}
+				o.RemoveDir(ctx, path)
 			}
 		}
 	}()
