@@ -38,6 +38,7 @@ import (
 	"github.com/containerd/containerd/services/server"
 	srvconfig "github.com/containerd/containerd/services/server/config"
 	"github.com/containerd/containerd/sys"
+	"github.com/containerd/containerd/sys/blkiorun"
 	"github.com/containerd/containerd/version"
 )
 
@@ -130,6 +131,16 @@ can be used and modified as necessary as a custom configuration.`
 		// Apply flags to the config
 		if err := applyFlags(context, config); err != nil {
 			return err
+		}
+
+		// Initialize block IO weight control (Linux only, no-op on other platforms)
+		blkioConfig := config.Cgroup.Blkio
+		if err := blkiorun.Init(
+			blkiorun.Config{Weight: uint16(blkioConfig.Weight)},
+			blkioConfig.SlicePath,
+			blkioConfig.SliceName,
+		); err != nil {
+			log.G(ctx).WithError(err).Warn("failed to initialize blkio control")
 		}
 
 		if config.GRPC.Address == "" {

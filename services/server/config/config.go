@@ -166,6 +166,23 @@ type MetricsConfig struct {
 // CgroupConfig provides cgroup configuration
 type CgroupConfig struct {
 	Path string `toml:"path"`
+	// Blkio configures block IO control for containerd operations (cgroups v2)
+	Blkio BlkioConfig `toml:"blkio"`
+}
+
+// BlkioConfig provides block IO configuration for cgroups v2
+type BlkioConfig struct {
+	// Weight is the IO weight value (10-1000) for image pull, unpack, and commit operations.
+	// Set to 0 to disable IO weight control. Default is 0 (disabled).
+	Weight int `toml:"weight"`
+	// SlicePath is the path to an existing cgroup for IO weight control.
+	// If specified, this cgroup will be used directly (must already exist with io controller enabled).
+	// If empty, a transient systemd slice will be created via D-Bus using SliceName.
+	SlicePath string `toml:"slice_path"`
+	// SliceName is the systemd slice name for IO weight control (e.g., "containerdio.slice").
+	// Only used when SlicePath is empty. The slice will be created as a transient unit via systemd D-Bus.
+	// Leave empty to use default: "containerdio.slice"
+	SliceName string `toml:"slice_name"`
 }
 
 // ProxyPlugin provides a proxy plugin configuration

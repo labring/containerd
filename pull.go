@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/remotes"
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/remotes/docker/schema1" //nolint:staticcheck // Ignore SA1019. Need to keep deprecated package for compatibility.
+	"github.com/containerd/containerd/sys/blkiorun"
 	"github.com/containerd/containerd/tracing"
 )
 
@@ -53,6 +54,14 @@ func (c *Client) Pull(ctx context.Context, ref string, opts ...RemoteOpt) (_ Ima
 		}
 	}
 
+	// Run with configured IO weight (if enabled)
+	return blkiorun.Go(func() (Image, error) {
+		return c.pull(ctx, ref, pullCtx, span)
+	})
+}
+
+// pull is the internal implementation of Pull that performs the actual work.
+func (c *Client) pull(ctx context.Context, ref string, pullCtx *RemoteContext, span *tracing.Span) (_ Image, retErr error) {
 	if pullCtx.PlatformMatcher == nil {
 		if len(pullCtx.Platforms) > 1 {
 			return nil, errors.New("cannot pull multiplatform image locally, try Fetch")
