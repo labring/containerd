@@ -231,22 +231,36 @@ func LocalWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 
 	cg, err := createCgroup(cfg)
 	if err != nil {
-		log.L.WithError(err).Debug("blkiorun: failed to create cgroup")
+		if errors.Is(err, ErrNotInitialized) {
+			return fn()
+		}
+		log.L.WithError(err).Error("blkiorun: failed to create cgroup")
 		return fn()
 	}
-	defer cg.destroy()
+	defer func(){
+		err := cg.destroy()
+		if err != nil {
+			log.L.WithError(err).Error("blkiorun: failed to destroy cgroup")
+		}
+	}()
 
 	if err := cg.enter(); err != nil {
-		log.L.WithError(err).Debug("blkiorun: failed to enter cgroup")
+		log.L.WithError(err).Error("blkiorun: failed to enter cgroup")
 		return fn()
 	}
-	defer cg.leave()
+	defer func(){
+		err := cg.leave()
+		if err != nil {
+			log.L.WithError(err).Error("blkiorun: failed to leave cgroup")
+		}
+	}()
 
 	return fn()
 }
 
 // cgroup represents a temporary cgroup for IO weight control
 type cgroup struct {
+	containerdCgroup string
 	path string
 }
 
@@ -262,9 +276,12 @@ func createCgroup(cfg Config) (*cgroup, error) {
 		return nil, err
 	}
 
-	cg := &cgroup{path: path}
+	cg := &cgroup{path: path, containerdCgroup: state.containerdPath}
 	if err := applyConfig(cg.path, cfg); err != nil {
-		cg.destroy()
+		errDestroy := cg.destroy()
+		if errDestroy != nil {
+			log.L.WithError(errDestroy).Error("blkiorun: failed to destroy cgroup after applyConfig failure")
+		}
 		return nil, err
 	}
 
@@ -340,18 +357,18 @@ func writeIOWeight(cgroupPath string, weight uint16) error {
 }
 
 func (cg *cgroup) enter() error {
+	log.L.Debugf("blkiorun: entering cgroup %s", cg.path)
 	return os.WriteFile(filepath.Join(cg.path, "cgroup.procs"), []byte(strconv.Itoa(syscall.Gettid())), 0644)
 }
 
 func (cg *cgroup) leave() error {
-	if state == nil {
-		return nil
-	}
-	return os.WriteFile(filepath.Join(state.containerdPath, "cgroup.procs"), []byte(strconv.Itoa(syscall.Gettid())), 0644)
+	log.L.Debugf("blkiorun: leaving cgroup %s", cg.path)
+	return os.WriteFile(filepath.Join(cg.containerdCgroup, "cgroup.procs"), []byte(strconv.Itoa(syscall.Gettid())), 0644)
 }
 
-func (cg *cgroup) destroy() {
-	os.Remove(cg.path)
+func (cg *cgroup) destroy() error {
+	log.L.Debugf("blkiorun: removing cgroup %s", cg.path)
+	return os.Remove(cg.path)
 }
 
 // Helper functions
