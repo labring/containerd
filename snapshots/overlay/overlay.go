@@ -30,6 +30,7 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/overlay/overlayutils"
 	"github.com/containerd/containerd/snapshots/storage"
+	"github.com/containerd/containerd/sys/blkiorun"
 	"github.com/containerd/continuity/fs"
 	"github.com/containerd/log"
 	"github.com/sirupsen/logrus"
@@ -352,11 +353,14 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 		return err
 	}
 
-	for _, dir := range cleanup {
-		if err := os.RemoveAll(dir); err != nil {
-			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+	blkiorun.Go(func() (struct{}, error) {
+		for _, dir := range cleanup {
+			if err := os.RemoveAll(dir); err != nil {
+				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+			}
 		}
-	}
+		return struct{}{}, nil
+	})
 
 	return nil
 }
