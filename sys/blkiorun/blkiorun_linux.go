@@ -79,6 +79,9 @@ var (
 	bfqSupported     bool
 	bfqSupportedOnce sync.Once
 
+	cgroupV2     bool
+	cgroupV2Once sync.Once
+
 	// ErrNotInitialized is returned when blkiorun is not initialized
 	ErrNotInitialized = errors.New("blkiorun not initialized, call Init first")
 )
@@ -117,8 +120,7 @@ func Init(cfg Config, slicePath, sliceName string) error {
 		log.L.Infof("blkiorun: weight configured: %d", cfg.Weight)
 
 		if !isCgroupV2() {
-			log.L.Warn("blkiorun: cgroups v2 not available, disabled")
-			return
+			log.L.Warn("blkiorun: cgroups v2 not available")
 		}
 
 		// Get containerd's cgroup path
@@ -355,6 +357,13 @@ func (cg *cgroup) destroy() {
 // Helper functions
 
 func isCgroupV2() bool {
+	cgroupV2Once.Do(func() {
+		cgroupV2 = checkCgroupV2()
+	})
+	return cgroupV2
+}
+
+func checkCgroupV2() bool {
 	stat, err := os.Stat("/sys/fs/cgroup/cgroup.controllers")
 	return err == nil && !stat.IsDir()
 }
