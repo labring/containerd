@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/pkg/errors"
@@ -34,6 +35,29 @@ import (
 
 	apis "github.com/openebs/lvm-localpv/pkg/apis/openebs.io/lvm/v1alpha1"
 )
+
+// lvmLock lvm global read-write lock
+var lvmLock sync.RWMutex
+
+// LockLV acquires the global LVM lock for write operations
+func LockLV() {
+	lvmLock.Lock()
+}
+
+// UnlockLV releases the global LVM lock for write operations
+func UnlockLV() {
+	lvmLock.Unlock()
+}
+
+// RLockLV acquires the global LVM lock for read operations
+func RLockLV() {
+	lvmLock.RLock()
+}
+
+// RUnlockLV releases the global LVM lock for read operations
+func RUnlockLV() {
+	lvmLock.RUnlock()
+}
 
 // lvm related constants
 const (
@@ -322,6 +346,9 @@ func RunCommandSplit(ctx context.Context, command string, args ...string) ([]byt
 
 // CreateVolume creates the lvm volume
 func CreateVolume(ctx context.Context, vol *apis.LVMVolume) error {
+	lvmLock.Lock()
+	defer lvmLock.Unlock()
+
 	volume := vol.Spec.VolGroup + "/" + vol.Name
 
 	volExists, err := CheckVolumeExists(ctx, vol)
@@ -330,7 +357,7 @@ func CreateVolume(ctx context.Context, vol *apis.LVMVolume) error {
 	}
 	if volExists {
 		klog.Infof("CreateVolume: volume (%s) already exists, skipping its creation", volume)
-		err := ResizeLVMVolume(ctx, vol, false)
+		err := resizeLVMVolumeInternal(ctx, vol, false)
 		if err != nil {
 			return err
 		}
@@ -354,6 +381,9 @@ func CreateVolume(ctx context.Context, vol *apis.LVMVolume) error {
 
 // DestroyVolume deletes the lvm volume
 func DestroyVolume(ctx context.Context, vol *apis.LVMVolume) error {
+	lvmLock.Lock()
+	defer lvmLock.Unlock()
+
 	if vol.Spec.VolGroup == "" {
 		klog.Infof("DestroyVolume: volGroup not set for lvm volume %v, skipping its deletion", vol.Name)
 		return nil
@@ -392,6 +422,9 @@ func DestroyVolume(ctx context.Context, vol *apis.LVMVolume) error {
 
 // ForceDestroyVolume force destroys the lvm volume
 func ForceDestroyVolume(ctx context.Context, vol *apis.LVMVolume) error {
+	lvmLock.Lock()
+	defer lvmLock.Unlock()
+
 	if vol.Spec.VolGroup == "" {
 		klog.Infof("ForceDestroyVolume: volGroup not set for lvm volume %v, skipping its deletion", vol.Name)
 		return nil
@@ -421,6 +454,169 @@ func ForceDestroyVolume(ctx context.Context, vol *apis.LVMVolume) error {
 
 	klog.Infof("ForceDestroyVolume: force destroyed volume %s successfully", volume)
 	return nil
+}
+
+// MountVolume mounts an LVM logical volume to the specified path
+// This function is protected by the global LVM lock to prevent concurrent operations
+func MountVolume(devicePath, mountPath, fsType string, flags uintptr, options string) error {
+	lvmLock.Lock()
+	defer lvmLock.Unlock()
+
+	// check if the mount path exists, if not create it
+	if _, err := os.Stat(mountPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(mountPath, 0755); err != nil {
+			return fmt.Errorf("failed to create mount directory %s: %w", mountPath, err)
+		}
+	} else if err != nil {
+		// handle other errors (e.g., permission denied, IO error, etc.)
+		return fmt.Errorf("failed to stat mount path %s: %w", mountPath, err)
+	}
+
+	// check if the device exists
+	if _, err := os.Stat(devicePath); os.IsNotExist(err) {
+		return fmt.Errorf("device %s does not exist: %w", devicePath, err)
+	} else if err != nil {
+		// handle other errors (e.g., permission denied, IO error, etc.)
+		return fmt.Errorf("failed to stat device %s: %w", devicePath, err)
+	}
+
+	// execute mount
+	if err := syscall.Mount(devicePath, mountPath, fsType, flags, options); err != nil {
+		return fmt.Errorf("failed to mount %s to %s: %w", devicePath, mountPath, err)
+	}
+
+	klog.Infof("lvm: successfully mounted %s to %s", devicePath, mountPath)
+	return nil
+}
+
+// UnmountVolume unmounts a path
+// This function is protected by the global LVM lock to prevent concurrent operations
+// It uses the same lock as LVM operations because unmount often happens alongside
+// LVM operations (resize, remove) and they may conflict on the same device
+// UnmountVolumeInternal performs the actual unmount operation without acquiring locks.
+// The caller must hold the appropriate lock before calling this function.
+func UnmountVolumeInternal(mountPath string) error {
+	// check if the path is a mount point
+	isMounted, err := IsMountPointInternal(mountPath)
+	if err != nil {
+		return fmt.Errorf("failed to check if %s is a mount point: %w", mountPath, err)
+	}
+
+	if !isMounted {
+		klog.Infof("lvm: path %s is not a mount point, skipping unmount", mountPath)
+		return nil
+	}
+
+	// unmount
+	if err := syscall.Unmount(mountPath, 0); err != nil {
+		klog.Warningf("lvm: failed to unmount %s: %v", mountPath, err)
+		return fmt.Errorf("failed to unmount %s: %w", mountPath, err)
+	}
+
+	klog.Infof("lvm: successfully unmounted %s", mountPath)
+	return nil
+}
+
+// IsMountPointInternal checks if a directory is a mount point without acquiring locks.
+// The caller must hold the appropriate lock before calling this function.
+func IsMountPointInternal(dir string) (bool, error) {
+	// check if the directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return false, nil
+	}
+
+	// get directory information
+	dirStat, err := os.Stat(dir)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat %s: %w", dir, err)
+	}
+
+	// get parent directory information
+	parentDir := filepath.Dir(dir)
+	parentStat, err := os.Stat(parentDir)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat parent %s: %w", parentDir, err)
+	}
+
+	// if the directory and parent directory have different device numbers, it is a mount point
+	dirDev := dirStat.Sys().(*syscall.Stat_t).Dev
+	parentDev := parentStat.Sys().(*syscall.Stat_t).Dev
+
+	return dirDev != parentDev, nil
+}
+
+func UnmountVolume(mountPath string) error {
+	lvmLock.Lock()
+	defer lvmLock.Unlock()
+
+	return UnmountVolumeInternal(mountPath)
+}
+
+// FindMountPointByDevice finds all mount points for a given device path by reading /proc/mounts
+// Returns a slice of mount point paths if found, empty slice if not mounted, and error on failure
+func FindMountPointByDevice(devicePath string) ([]string, error) {
+	lvmLock.RLock()
+	defer lvmLock.RUnlock()
+
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read /proc/mounts: %w", err)
+	}
+
+	var mountPoints []string
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		// fields[0] is the device path, fields[1] is the mount point
+		mountDevice := fields[0]
+		mountPoint := fields[1]
+
+		// Check if the device matches (handle both direct path and symlink resolution)
+		if mountDevice == devicePath {
+			mountPoints = append(mountPoints, mountPoint)
+			continue
+		}
+
+		// Resolve both paths and compare
+		resolvedDevicePath, err1 := filepath.EvalSymlinks(devicePath)
+		resolvedMountDevice, err2 := filepath.EvalSymlinks(mountDevice)
+
+		// If both resolve successfully, compare resolved paths
+		if err1 == nil && err2 == nil {
+			if resolvedDevicePath == resolvedMountDevice {
+				mountPoints = append(mountPoints, mountPoint)
+				continue
+			}
+		}
+
+		// Also check if one resolves to the other
+		if err1 == nil && resolvedDevicePath == mountDevice {
+			mountPoints = append(mountPoints, mountPoint)
+			continue
+		}
+		if err2 == nil && resolvedMountDevice == devicePath {
+			mountPoints = append(mountPoints, mountPoint)
+			continue
+		}
+	}
+
+	return mountPoints, nil
+}
+
+// isMountPoint checks if a directory is a mount point
+func IsMountPoint(dir string) (bool, error) {
+	lvmLock.RLock()
+	defer lvmLock.RUnlock()
+
+	return IsMountPointInternal(dir)
 }
 
 // CheckLVMMetadataExists checks if the lvm volume exists in metadata
@@ -508,8 +704,16 @@ func buildVolumeResizeArgs(vol *apis.LVMVolume, resizefs bool) []string {
 //     same size will not return any errors
 //  2. Triggering `lvextend <dev_path> -L <size>` more than one time will
 //     cause errors
+//
+// ResizeLVMVolume external interface, with lock
 func ResizeLVMVolume(ctx context.Context, vol *apis.LVMVolume, resizefs bool) error {
+	lvmLock.Lock()
+	defer lvmLock.Unlock()
+	return resizeLVMVolumeInternal(ctx, vol, resizefs)
+}
 
+// resizeLVMVolumeInternal internal function, without lock (for CreateVolume etc.)
+func resizeLVMVolumeInternal(ctx context.Context, vol *apis.LVMVolume, resizefs bool) error {
 	// In case if resizefs is not enabled then check current size
 	// before exapnding LVM volume(If volume is already expanded then
 	// it might be error prone). This also makes ResizeLVMVolume func
@@ -1001,6 +1205,9 @@ func ListLVMLogicalVolume(ctx context.Context) ([]LogicalVolume, error) {
 
 // modified by sealos
 func ListLVMLogicalVolumeByVG(ctx context.Context, vg string, pool string) ([]LogicalVolume, error) {
+	lvmLock.RLock()
+	defer lvmLock.RUnlock()
+
 	if err := ReloadLVMMetadataCache(ctx); err != nil {
 		return nil, err
 	}

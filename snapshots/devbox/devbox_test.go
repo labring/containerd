@@ -125,7 +125,7 @@ func TestFindMountPointAndUnmount(t *testing.T) {
 
 	// Step 5: Test findMountPointByDevice
 	t.Logf("Step 5: Testing findMountPointByDevice for %s", devicePath)
-	foundMountPoints, err := findMountPointByDevice(devicePath)
+	foundMountPoints, err := lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestFindMountPointAndUnmount(t *testing.T) {
 
 	// Step 7: Verify the mount point is no longer mounted
 	t.Logf("Step 7: Verifying mount point is no longer mounted")
-	foundMountPoints, err = findMountPointByDevice(devicePath)
+	foundMountPoints, err = lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed after unmount: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestFindMountPointByDevice_UnmountedDevice(t *testing.T) {
 	devicePath := fmt.Sprintf("/dev/%s/%s", testVGName, lvName)
 
 	// Test findMountPointByDevice on an unmounted device
-	mountPoints, err := findMountPointByDevice(devicePath)
+	mountPoints, err := lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestFindMountPointAndUnmount_Concurrent(t *testing.T) {
 			}()
 
 			// Step 5: Test findMountPointByDevice (concurrent access)
-			foundMountPoints, err := findMountPointByDevice(devicePath)
+			foundMountPoints, err := lvm.FindMountPointByDevice(devicePath)
 			if err != nil {
 				errorChan <- fmt.Errorf("goroutine %d: findMountPointByDevice failed: %w", index, err)
 				return
@@ -333,7 +333,7 @@ func TestFindMountPointAndUnmount_Concurrent(t *testing.T) {
 			mounted = false // Mark as unmounted so defer doesn't try again
 
 			// Step 7: Verify the mount point is no longer mounted
-			foundMountPoints, err = findMountPointByDevice(devicePath)
+			foundMountPoints, err = lvm.FindMountPointByDevice(devicePath)
 			if err != nil {
 				errorChan <- fmt.Errorf("goroutine %d: findMountPointByDevice failed after unmount: %w", index, err)
 				return
@@ -661,7 +661,7 @@ func TestFindMountPointByDevice(t *testing.T) {
 
 	// Step 2: Test findMountPointByDevice on unmounted device (should return empty)
 	t.Logf("Step 2: Testing findMountPointByDevice on unmounted device")
-	mountPoints, err := findMountPointByDevice(devicePath)
+	mountPoints, err := lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestFindMountPointByDevice(t *testing.T) {
 
 	// Step 6: Test findMountPointByDevice on mounted device
 	t.Logf("Step 6: Testing findMountPointByDevice on mounted device")
-	mountPoints, err = findMountPointByDevice(devicePath)
+	mountPoints, err = lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestFindMountPointByDevice(t *testing.T) {
 		t.Fatalf("Failed to unmount %s: %v", expectedMountPoint, err)
 	}
 
-	mountPoints, err = findMountPointByDevice(devicePath)
+	mountPoints, err = lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed after unmount: %v", err)
 	}
@@ -813,7 +813,7 @@ func TestFindMountPointByDevice_MultipleMountPoints(t *testing.T) {
 		mountedPoints = append(mountedPoints, mountPoint)
 
 		// Verify it's mounted after each mount
-		mountPoints, err := findMountPointByDevice(devicePath)
+		mountPoints, err := lvm.FindMountPointByDevice(devicePath)
 		if err != nil {
 			t.Fatalf("findMountPointByDevice failed after mounting to %s: %v", mountPoint, err)
 		}
@@ -833,7 +833,7 @@ func TestFindMountPointByDevice_MultipleMountPoints(t *testing.T) {
 
 	// Step 6: Test findMountPointByDevice finds all mount points
 	t.Logf("Step 6: Testing findMountPointByDevice finds all %d mount points", numMountPoints)
-	foundMountPoints, err := findMountPointByDevice(devicePath)
+	foundMountPoints, err := lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
@@ -951,7 +951,7 @@ func TestCleanupUnmountAllMountPoints(t *testing.T) {
 
 	// Step 5: Verify all mount points are mounted
 	t.Logf("Step 5: Verifying all %d mount points are mounted", numMountPoints)
-	foundMountPoints, err := findMountPointByDevice(devicePath)
+	foundMountPoints, err := lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
@@ -967,7 +967,7 @@ func TestCleanupUnmountAllMountPoints(t *testing.T) {
 	// Simulate the cleanup logic from cleanupDirectories
 	for _, lvNameToCleanup := range removedLvNames {
 		devicePathToCheck := fmt.Sprintf("/dev/%s/%s", snapshotter.lvmVgName, lvNameToCleanup)
-		mountPointsToUnmount, err := findMountPointByDevice(devicePathToCheck)
+		mountPointsToUnmount, err := lvm.FindMountPointByDevice(devicePathToCheck)
 		if err != nil {
 			t.Fatalf("Failed to find mount points for LV %s: %v", lvNameToCleanup, err)
 		}
@@ -992,7 +992,7 @@ func TestCleanupUnmountAllMountPoints(t *testing.T) {
 
 	// Step 7: Verify all mount points are unmounted
 	t.Logf("Step 7: Verifying all mount points are unmounted")
-	foundMountPoints, err = findMountPointByDevice(devicePath)
+	foundMountPoints, err = lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed after unmount: %v", err)
 	}
@@ -1004,7 +1004,7 @@ func TestCleanupUnmountAllMountPoints(t *testing.T) {
 
 	// Step 8: Verify device can be removed (no mount points should allow removal)
 	t.Logf("Step 8: Verifying device has no mount points (can be removed)")
-	remainingMountPoints, err := findMountPointByDevice(devicePath)
+	remainingMountPoints, err := lvm.FindMountPointByDevice(devicePath)
 	if err != nil {
 		t.Fatalf("findMountPointByDevice failed: %v", err)
 	}
