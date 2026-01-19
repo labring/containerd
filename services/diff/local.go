@@ -27,6 +27,7 @@ import (
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/services"
+	"github.com/containerd/containerd/sys/blkiorun"
 	"github.com/containerd/typeurl/v2"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -120,12 +121,16 @@ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.C
 	}
 	opts = append(opts, diff.WithSyncFs(er.SyncFs))
 
-	for _, differ := range l.differs {
-		ocidesc, err = differ.Apply(ctx, desc, mounts, opts...)
-		if !errdefs.IsNotImplemented(err) {
-			break
+	_, err = blkiorun.Go(func() (struct{}, error) {
+		var applyErr error
+		for _, differ := range l.differs {
+			ocidesc, applyErr = differ.Apply(ctx, desc, mounts, opts...)
+			if !errdefs.IsNotImplemented(applyErr) {
+				break
+			}
 		}
-	}
+		return struct{}{}, applyErr
+	})
 
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
@@ -160,12 +165,17 @@ func (l *local) Diff(ctx context.Context, dr *diffapi.DiffRequest, _ ...grpc.Cal
 		opts = append(opts, diff.WithSourceDateEpoch(&tm))
 	}
 
-	for _, d := range l.differs {
-		ocidesc, err = d.Compare(ctx, aMounts, bMounts, opts...)
-		if !errdefs.IsNotImplemented(err) {
-			break
+	_, err = blkiorun.Go(func() (struct{}, error) {
+		var compareErr error
+		for _, d := range l.differs {
+			ocidesc, compareErr = d.Compare(ctx, aMounts, bMounts, opts...)
+			if !errdefs.IsNotImplemented(compareErr) {
+				break
+			}
 		}
-	}
+		return struct{}{}, compareErr
+	})
+
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
