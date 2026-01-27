@@ -121,7 +121,7 @@ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.C
 	}
 	opts = append(opts, diff.WithSyncFs(er.SyncFs))
 
-	_, err = blkiorun.Go(func() (struct{}, error) {
+	_, err = blkiorun.Do(func() (struct{}, error) {
 		var applyErr error
 		for _, differ := range l.differs {
 			ocidesc, applyErr = differ.Apply(ctx, desc, mounts, opts...)
@@ -165,7 +165,7 @@ func (l *local) Diff(ctx context.Context, dr *diffapi.DiffRequest, _ ...grpc.Cal
 		opts = append(opts, diff.WithSourceDateEpoch(&tm))
 	}
 
-	_, err = blkiorun.Go(func() (struct{}, error) {
+	_, err = blkiorun.Do(func() (struct{}, error) {
 		var compareErr error
 		for _, d := range l.differs {
 			ocidesc, compareErr = d.Compare(ctx, aMounts, bMounts, opts...)

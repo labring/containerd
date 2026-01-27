@@ -225,7 +225,7 @@ func TestLocalWithConfigReal(t *testing.T) {
 		t.Skip("blkiorun not initialized")
 	}
 
-	result, err := LocalWithConfig(Config{Weight: 150}, func() (string, error) {
+	result, err := lockWithConfig(Config{Weight: 150}, func() (string, error) {
 		return "test-result", nil
 	})
 
@@ -243,7 +243,7 @@ func TestGoWithConfigReal(t *testing.T) {
 		t.Skip("blkiorun not initialized")
 	}
 
-	result, err := GoWithConfig(Config{Weight: 150}, func() (string, error) {
+	result, err := DoWithConfig(Config{Weight: 150}, func() (string, error) {
 		return "test-result", nil
 	})
 

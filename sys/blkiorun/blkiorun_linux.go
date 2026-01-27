@@ -193,13 +193,13 @@ func IsInitialized() bool {
 	return state.initialized
 }
 
-// Go executes fn in a new goroutine with configured IO weight.
-func Go[T any](fn func() (T, error)) (T, error) {
-	return GoWithConfig(state.config, fn)
+// Do executes fn in a new goroutine with configured IO weight.
+func Do[T any](fn func() (T, error)) (T, error) {
+	return DoWithConfig(state.config, fn)
 }
 
-// GoWithConfig executes fn in a new goroutine with specified config.
-func GoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
+// DoWithConfig executes fn in a new goroutine with specified config.
+func DoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 	type result struct {
 		value T
 		err   error
@@ -207,7 +207,7 @@ func GoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 
 	ch := make(chan result, 1)
 	go func() {
-		v, err := LocalWithConfig(cfg, fn)
+		v, err := lockWithConfig(cfg, fn)
 		ch <- result{v, err}
 	}()
 
@@ -215,13 +215,8 @@ func GoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 	return res.value, res.err
 }
 
-// Local executes fn in current goroutine with configured IO weight.
-func Local[T any](fn func() (T, error)) (T, error) {
-	return LocalWithConfig(state.config, fn)
-}
-
-// LocalWithConfig executes fn in current goroutine with specified config.
-func LocalWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
+// lockWithConfig executes fn in current goroutine with specified config.
+func lockWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 	if cfg.Weight == 0 || !IsInitialized() {
 		return fn()
 	}

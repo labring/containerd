@@ -353,7 +353,7 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 		return err
 	}
 
-	blkiorun.Go(func() (struct{}, error) {
+	blkiorun.Do(func() (struct{}, error) {
 		for _, dir := range cleanup {
 			if err := os.RemoveAll(dir); err != nil {
 				log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")

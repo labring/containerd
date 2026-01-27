@@ -375,7 +375,7 @@ func (u *Unpacker) unpack(
 		case <-fetchC[i-fetchOffset]:
 		}
 
-		diff, err := blkiorun.Local(func() (ocispec.Descriptor, error) {
+		diff, err := blkiorun.Do(func() (ocispec.Descriptor, error) {
 			return a.Apply(ctx, desc, mounts, unpack.ApplyOpts...)
 		})
 		if err != nil {
@@ -477,7 +477,7 @@ func (u *Unpacker) fetch(ctx context.Context, h images.Handler, layers []ocispec
 				return err
 			}
 
-			_, err = blkiorun.Local(func() ([]ocispec.Descriptor, error) {
+			_, err = blkiorun.Do(func() ([]ocispec.Descriptor, error) {
 				return h.Handle(ctx2, desc)
 			})
 

@@ -55,7 +55,7 @@ func (c *Client) Pull(ctx context.Context, ref string, opts ...RemoteOpt) (_ Ima
 	}
 
 	// Run with configured IO weight (if enabled)
-	return blkiorun.Go(func() (Image, error) {
+	return blkiorun.Do(func() (Image, error) {
 		return c.pull(ctx, ref, pullCtx, span)
 	})
 }

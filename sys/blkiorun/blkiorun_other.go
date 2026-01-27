@@ -28,22 +28,12 @@ func IsInitialized() bool {
 	return false
 }
 
-// Go simply executes fn on non-Linux platforms.
-func Go[T any](fn func() (T, error)) (T, error) {
+// Do simply executes fn on non-Linux platforms.
+func Do[T any](fn func() (T, error)) (T, error) {
 	return fn()
 }
 
-// GoWithConfig simply executes fn on non-Linux platforms.
-func GoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
-	return fn()
-}
-
-// Local simply executes fn on non-Linux platforms.
-func Local[T any](fn func() (T, error)) (T, error) {
-	return fn()
-}
-
-// LocalWithConfig simply executes fn on non-Linux platforms.
-func LocalWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
+// DoWithConfig simply executes fn on non-Linux platforms.
+func DoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 	return fn()
 }
