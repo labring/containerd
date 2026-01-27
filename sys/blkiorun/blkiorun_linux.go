@@ -339,12 +339,12 @@ func writeIOWeight(cgroupPath string, weight uint16) error {
 
 func (cg *cgroup) enter() error {
 	log.L.Debugf("blkiorun: entering cgroup %s", cg.path)
-	return os.WriteFile(filepath.Join(cg.path, "cgroup.procs"), []byte(strconv.Itoa(syscall.Gettid())), 0644)
+	return os.WriteFile(filepath.Join(cg.path, cgroupThreadFile()), []byte(strconv.Itoa(syscall.Gettid())), 0644)
 }
 
 func (cg *cgroup) leave() error {
 	log.L.Debugf("blkiorun: leaving cgroup %s", cg.path)
-	return os.WriteFile(filepath.Join(cg.containerdCgroup, "cgroup.procs"), []byte(strconv.Itoa(syscall.Gettid())), 0644)
+	return os.WriteFile(filepath.Join(cg.containerdCgroup, cgroupThreadFile()), []byte(strconv.Itoa(syscall.Gettid())), 0644)
 }
 
 func (cg *cgroup) destroy() error {
@@ -368,6 +368,15 @@ func isCgroupV2() bool {
 func checkCgroupV2() bool {
 	stat, err := os.Stat("/sys/fs/cgroup/cgroup.controllers")
 	return err == nil && !stat.IsDir()
+}
+
+// cgroupThreadFile returns the appropriate file name for adding threads to cgroup.
+// For cgroup v2, it returns "cgroup.threads", for cgroup v1, it returns "tasks".
+func cgroupThreadFile() string {
+	if isCgroupV2() {
+		return "cgroup.threads"
+	}
+	return "tasks"
 }
 
 func getCurrentCgroupPath() (string, error) {
