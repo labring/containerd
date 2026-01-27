@@ -165,7 +165,6 @@ func (s *service) Commit(ctx context.Context, cr *snapshotsapi.CommitSnapshotReq
 	if cr.Labels != nil {
 		opts = append(opts, snapshots.WithLabels(cr.Labels))
 	}
-
 	if err := sn.Commit(ctx, cr.Name, cr.Key, opts...); err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}

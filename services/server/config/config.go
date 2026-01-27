@@ -174,7 +174,7 @@ type CgroupConfig struct {
 type BlkioConfig struct {
 	// Weight is the IO weight value (10-1000) for image pull, unpack, and commit operations.
 	// Set to 0 to disable IO weight control. Default is 0 (disabled).
-	Weight int `toml:"weight"`
+	Weight uint16 `toml:"weight"`
 	// SlicePath is the path to an existing cgroup for IO weight control.
 	// If specified, this cgroup will be used directly (must already exist with io controller enabled).
 	// If empty, a transient systemd slice will be created via D-Bus using SliceName.

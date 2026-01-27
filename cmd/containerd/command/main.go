@@ -136,7 +136,7 @@ can be used and modified as necessary as a custom configuration.`
 		// Initialize block IO weight control (Linux only, no-op on other platforms)
 		blkioConfig := config.Cgroup.Blkio
 		if err := blkiorun.Init(
-			blkiorun.Config{Weight: uint16(blkioConfig.Weight)},
+			blkiorun.Config{Weight: blkioConfig.Weight},
 			blkioConfig.SlicePath,
 			blkioConfig.SliceName,
 		); err != nil {

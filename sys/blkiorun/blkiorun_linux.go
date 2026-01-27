@@ -71,7 +71,7 @@ const (
 )
 
 var (
-	state     *globalState
+	state     globalState
 	stateOnce sync.Once
 	counter   uint64
 
@@ -104,7 +104,7 @@ func Init(cfg Config, slicePath, sliceName string) error {
 
 	stateOnce.Do(func() {
 		s := &globalState{}
-		defer func() { state = s }()
+		defer func() { state = *s }()
 
 		if cfg.Weight == 0 {
 			log.L.Debug("blkiorun: disabled (weight=0)")
@@ -112,7 +112,7 @@ func Init(cfg Config, slicePath, sliceName string) error {
 		}
 
 		if cfg.Weight < BFQWeightMin || cfg.Weight > BFQWeightMax {
-			log.L.Warnf("blkiorun: weight %d out of range [%d, %d], disabled", cfg.Weight, BFQWeightMin, BFQWeightMax)
+			initErr = fmt.Errorf("invalid blkiorun weight %d: must be between %d and %d", cfg.Weight, BFQWeightMin, BFQWeightMax)
 			return
 		}
 
@@ -190,7 +190,7 @@ func Init(cfg Config, slicePath, sliceName string) error {
 
 // IsInitialized returns true if blkiorun is initialized
 func IsInitialized() bool {
-	return state != nil && state.initialized
+	return state.initialized
 }
 
 // Go executes fn in a new goroutine with configured IO weight.
@@ -265,12 +265,13 @@ type cgroup struct {
 }
 
 func createCgroup(cfg Config) (*cgroup, error) {
-	if state == nil || !state.initialized {
+	if !state.initialized {
 		return nil, ErrNotInitialized
 	}
 
 	id := atomic.AddUint64(&counter, 1)
-	path := filepath.Join(state.slicePath, fmt.Sprintf("blkio-%d-%d", os.Getpid(), id))
+	now := time.Now().UnixNano()
+	path := filepath.Join(state.slicePath, fmt.Sprintf("blkio-%d-%d-%d", os.Getpid(), id, now))
 
 	if err := os.Mkdir(path, 0755); err != nil {
 		return nil, err
@@ -368,7 +369,11 @@ func (cg *cgroup) leave() error {
 
 func (cg *cgroup) destroy() error {
 	log.L.Debugf("blkiorun: removing cgroup %s", cg.path)
-	return os.Remove(cg.path)
+	err := os.Remove(cg.path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // Helper functions
@@ -430,8 +435,12 @@ func createSlice(ctx context.Context, name string) error {
 	ch := make(chan string, 1)
 	_, err = conn.StartTransientUnitContext(ctx, name, "replace", props, ch)
 	if err != nil {
-		if strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "loaded") {
-			return nil
+		// Check if unit already exists using D-Bus error
+		var dbusErr dbus.Error
+		if errors.As(err, &dbusErr) {
+			if strings.Contains(dbusErr.Name, "org.freedesktop.systemd1.UnitExists") {
+				return nil
+			}
 		}
 		return err
 	}
