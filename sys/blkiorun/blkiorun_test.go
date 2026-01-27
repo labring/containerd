@@ -161,8 +161,8 @@ func TestReadIOWeight(t *testing.T) {
 		return
 	}
 
-	assert.GreaterOrEqual(t, weight, uint16(BFQWeightMin), "Weight should be at least minimum")
-	assert.LessOrEqual(t, weight, uint16(BFQWeightMax), "Weight should be at most maximum")
+	assert.GreaterOrEqual(t, weight, BFQWeightMin, "Weight should be at least minimum")
+	assert.LessOrEqual(t, weight, BFQWeightMax, "Weight should be at most maximum")
 	t.Logf("Current IO weight: %d", weight)
 }
 
@@ -221,24 +221,6 @@ func TestLocalWithConfigReal(t *testing.T) {
 	}
 
 	// Skip if not initialized (this is expected in unit tests)
-	if !IsInitialized() {
-		t.Skip("blkiorun not initialized")
-	}
-
-	result, err := lockWithConfig(Config{Weight: 150}, func() (string, error) {
-		return "test-result", nil
-	})
-
-	assert.NoError(t, err)
-	assert.Equal(t, "test-result", result)
-}
-
-func TestGoWithConfigReal(t *testing.T) {
-	if !isCgroupV2() {
-		t.Skip("Test requires cgroups v2")
-	}
-
-	// Skip if not initialized
 	if !IsInitialized() {
 		t.Skip("blkiorun not initialized")
 	}

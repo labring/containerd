@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
    Copyright The containerd Authors.
 
@@ -193,30 +195,13 @@ func IsInitialized() bool {
 	return state.initialized
 }
 
-// Do executes fn in a new goroutine with configured IO weight.
+// Do executes fn in current goroutine with configured IO weight.
 func Do[T any](fn func() (T, error)) (T, error) {
 	return DoWithConfig(state.config, fn)
 }
 
-// DoWithConfig executes fn in a new goroutine with specified config.
+// DoWithConfig executes fn in current goroutine with specified config.
 func DoWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
-	type result struct {
-		value T
-		err   error
-	}
-
-	ch := make(chan result, 1)
-	go func() {
-		v, err := lockWithConfig(cfg, fn)
-		ch <- result{v, err}
-	}()
-
-	res := <-ch
-	return res.value, res.err
-}
-
-// lockWithConfig executes fn in current goroutine with specified config.
-func lockWithConfig[T any](cfg Config, fn func() (T, error)) (T, error) {
 	if cfg.Weight == 0 || !IsInitialized() {
 		return fn()
 	}
