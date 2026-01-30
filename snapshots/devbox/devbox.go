@@ -386,7 +386,7 @@ func (o *Snapshotter) RemoveDir(ctx context.Context, dir string) {
 			if err1 := os.RemoveAll(dir); err1 != nil {
 				log.G(ctx).WithError(err1).WithField("path", dir).Warn("failed to remove directory")
 			}
-			return struct{}{}, nil	
+			return struct{}{}, nil
 		})
 	}
 }
