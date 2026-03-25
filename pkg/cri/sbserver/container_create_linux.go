@@ -31,6 +31,7 @@ import (
 	"github.com/containerd/containerd/contrib/apparmor"
 	"github.com/containerd/containerd/contrib/seccomp"
 	"github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/pkg/cri/internal/devboxsnapshotter"
 	"github.com/containerd/containerd/snapshots"
 
 	customopts "github.com/containerd/containerd/pkg/cri/opts"
@@ -264,6 +265,15 @@ func appArmorProfileExists(profile string) (bool, error) {
 }
 
 // snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
-func snapshotterOpts(snapshotterName string, config *runtime.ContainerConfig) []snapshots.Opt {
-	return []snapshots.Opt{}
+func snapshotterOpts(snapshotterName string, _ *runtime.ContainerConfig, sandboxConfig *runtime.PodSandboxConfig) []snapshots.Opt {
+	if !snapshotterNeedsDevboxLabels(snapshotterName) || sandboxConfig == nil {
+		return nil
+	}
+
+	labels := devboxsnapshotter.LabelsFromAnnotations(sandboxConfig.Annotations)
+	if len(labels) == 0 {
+		return nil
+	}
+
+	return []snapshots.Opt{snapshots.WithLabels(labels)}
 }

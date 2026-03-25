@@ -612,9 +612,14 @@ func generateUserString(username string, uid, gid *runtime.Int64Value) (string, 
 }
 
 // snapshotterOpts returns any Linux specific snapshotter options for the rootfs snapshot
-func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
-	// fmt.Printf("devboxSnapshotterOpts: snapshotterName=%s, config=%+v\n", snapshotterName, config)
-	// add container annotations to snapshot labels
+func devboxSnapshotterOpts(_ string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
+	if config == nil || len(config.Annotations) == 0 {
+		return nil, nil
+	}
+
+	// Preserve the original devbox annotations here and let
+	// containerd.WithNewSnapshot translate them for snapshotters that consume
+	// containerd.io/snapshot/devbox-* labels.
 	labels := make(map[string]string)
 	maps.Copy(labels, config.Annotations)
 	return snapshots.WithLabels(labels), nil
@@ -634,7 +639,7 @@ func snapshotterOpts(snapshotterName string, config *runtime.ContainerConfig, sa
 	uid := sandboxConfig.Annotations[devboxUIDEnvKey]
 	if uid != "" {
 		snapshotOpts = append(snapshotOpts, snapshots.WithLabels(map[string]string{
-			"devbox.sealos.io/uid": uid,
+			devboxUIDEnvKey: uid,
 		}))
 	}
 	return snapshotOpts, nil

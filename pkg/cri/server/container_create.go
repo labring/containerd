@@ -189,9 +189,11 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 		return nil, err
 	}
 
-	// Check if the snapshotter is devbox and add the devbox snapshotter opts
-	if c.runtimeSnapshotter(ctx, ociRuntime) == "devbox" {
-		devboxOpt, err := devboxSnapshotterOpts(c.runtimeSnapshotter(ctx, ociRuntime), r.GetSandboxConfig())
+	// Add devbox snapshot labels for snapshotters that support the devbox
+	// writable-layer flow.
+	runtimeSnapshotter := c.runtimeSnapshotter(ctx, ociRuntime)
+	if isDevboxWritableSnapshotter(runtimeSnapshotter) {
+		devboxOpt, err := devboxSnapshotterOpts(runtimeSnapshotter, r.GetSandboxConfig())
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +204,7 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 
 	// Set snapshotter before any other options.
 	opts := []containerd.NewContainerOpts{
-		containerd.WithSnapshotter(c.runtimeSnapshotter(ctx, ociRuntime)),
+		containerd.WithSnapshotter(runtimeSnapshotter),
 		// Prepare container rootfs. This is always writeable even if
 		// the container wants a readonly rootfs since we want to give
 		// the runtime (runc) a chance to modify (e.g. to create mount

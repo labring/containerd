@@ -43,6 +43,7 @@ import (
 	"github.com/containerd/containerd/pkg/cap"
 	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/pkg/cri/config"
+	"github.com/containerd/containerd/pkg/cri/internal/devboxsnapshotter"
 	"github.com/containerd/containerd/pkg/cri/opts"
 	customopts "github.com/containerd/containerd/pkg/cri/opts"
 	"github.com/containerd/containerd/pkg/cri/util"
@@ -2282,6 +2283,54 @@ func TestSnapshotterOpts(t *testing.T) {
 				// If no labels are expected, verify that no devbox uid label is present
 				assert.NotContains(t, allLabels, "devbox.sealos.io/uid", "Unexpected devbox uid label found")
 			}
+		})
+	}
+}
+
+func TestDevboxSnapshotterOpts(t *testing.T) {
+	tests := []struct {
+		name           string
+		snapshotter    string
+		annotations    map[string]string
+		expectedLabels map[string]string
+	}{
+		{
+			name:        "stargz keeps original annotations",
+			snapshotter: devboxsnapshotter.StargzSnapshotter,
+			annotations: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-1",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "20Gi",
+			},
+			expectedLabels: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-1",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "20Gi",
+			},
+		},
+		{
+			name:        "devbox snapshotter keeps original annotations only",
+			snapshotter: DevboxSnapshotter,
+			annotations: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-3",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "5Gi",
+			},
+			expectedLabels: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-3",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "5Gi",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opt, err := devboxSnapshotterOpts(tt.snapshotter, &runtime.PodSandboxConfig{
+				Annotations: tt.annotations,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, opt)
+
+			info := &snapshots.Info{Labels: make(map[string]string)}
+			opt(info)
+			assert.Equal(t, tt.expectedLabels, info.Labels)
 		})
 	}
 }
