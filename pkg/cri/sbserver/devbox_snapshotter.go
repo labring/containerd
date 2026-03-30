@@ -18,6 +18,13 @@ package sbserver
 
 import "github.com/containerd/containerd/pkg/cri/internal/devboxsnapshotter"
 
+const devboxSnapshotter = "devbox"
+
 func snapshotterNeedsDevboxLabels(name string) bool {
-	return name == devboxsnapshotter.StargzSnapshotter
+	switch name {
+	case devboxSnapshotter, devboxsnapshotter.StargzSnapshotter:
+		return true
+	default:
+		return false
+	}
 }

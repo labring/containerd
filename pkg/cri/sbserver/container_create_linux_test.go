@@ -298,6 +298,21 @@ func TestSnapshotterOptsForDevboxLabels(t *testing.T) {
 			},
 		},
 		{
+			name:        "devbox keeps relevant devbox annotations",
+			snapshotter: "devbox",
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-9",
+					devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "8Gi",
+					"other.annotation": "ignored",
+				},
+			},
+			expectedLabels: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-9",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "8Gi",
+			},
+		},
+		{
 			name:        "non-stargz skips devbox labels",
 			snapshotter: "overlayfs",
 			sandboxConfig: &runtime.PodSandboxConfig{
