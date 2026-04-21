@@ -30,6 +30,7 @@ import (
 	apitasks "github.com/containerd/containerd/api/services/tasks/v1"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/internal/cri/devboxsnapshotter"
 	containerstore "github.com/containerd/containerd/v2/internal/cri/store/container"
 	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
 	ctrdutil "github.com/containerd/containerd/v2/internal/cri/util"
@@ -251,7 +252,7 @@ func (c *criService) handleContainerExit(ctx context.Context, e *eventtypes.Task
 			if err != nil {
 				return status, err
 			}
-			if container.Snapshotter == "devbox" {
+			if devboxsnapshotter.IsWritableSnapshotter(container.Snapshotter) {
 				if err := c.client.UpdateDevboxSnapshot(ctx, container.Snapshotter, container.ID, unmountLvm, "true"); err != nil {
 					log.G(ctx).WithError(err).Errorf("failed to update devbox snapshot for container %s", cntr.Container.ID())
 				}

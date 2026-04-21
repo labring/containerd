@@ -61,6 +61,11 @@ var (
 	DevboxStatusRemoved = []byte("removed")
 )
 
+type RemovedDevboxContent struct {
+	ContentID string
+	LVName    string
+}
+
 // parentKey returns a composite key of the parent and child identifiers. The
 // parts of the key are separated by a zero byte.
 func parentKey(parent, child uint64) []byte {
@@ -325,6 +330,7 @@ func CommitActive(ctx context.Context, key, name string, usage snapshots.Usage, 
 		}
 
 		id = readID(sbkt)
+		contentID := sbkt.Get(DevboxKeyContentID)
 		si := snapshots.Info{
 			Name:    name,
 			Parent:  string(sbkt.Get(bucketKeyParent)),
@@ -346,6 +352,22 @@ func CommitActive(ctx context.Context, key, name string, usage snapshots.Usage, 
 		}
 		if err := putUsage(cbkt, usage); err != nil {
 			return err
+		}
+		if len(contentID) > 0 {
+			if err := cbkt.Put(DevboxKeyContentID, contentID); err != nil {
+				return err
+			}
+			root := pbkt.Bucket(DevboxStoragePathBucket)
+			if root != nil {
+				if contentBkt := root.Bucket(contentID); contentBkt != nil {
+					snapshotKey := contentBkt.Get(DevboxKeySnapshotKey)
+					if len(snapshotKey) == 0 || string(snapshotKey) == key {
+						if err := contentBkt.Put(DevboxKeySnapshotKey, []byte(name)); err != nil {
+							return err
+						}
+					}
+				}
+			}
 		}
 
 		if err := bkt.DeleteBucket([]byte(key)); err != nil {
@@ -505,8 +527,9 @@ func SetDevboxContent(ctx context.Context, key, contentID, lvName, mountPath str
 	})
 }
 
-// RemoveDevbox removes the devbox content association for a snapshot key and
-// returns the mount path if one was recorded.
+// RemoveDevbox removes the snapshot association for a devbox content record and
+// returns the mount path if one was recorded. Removed content metadata is kept
+// until the LV cleanup path deletes the volume successfully.
 func RemoveDevbox(ctx context.Context, key string) (string, error) {
 	var mountPath string
 
@@ -530,15 +553,22 @@ func RemoveDevbox(ctx context.Context, key string) (string, error) {
 		if cbkt == nil {
 			return nil
 		}
-		mountPath = string(cbkt.Get(DevboxKeyPath))
+		snapshotKey := string(cbkt.Get(DevboxKeySnapshotKey))
+		if snapshotKey == key {
+			mountPath = string(cbkt.Get(DevboxKeyPath))
+		}
 
 		log.G(ctx).WithFields(log.Fields{
 			"key":             key,
 			"contentID":       string(contentID),
+			"snapshotKey":     snapshotKey,
 			"mountPath":       mountPath,
 			"mountPath_empty": mountPath == "",
 		}).Warnf("[REMOVE-DEVBOX-TRACE] Retrieved fields from snapshot bucket")
-		return root.DeleteBucket(contentID)
+		if snapshotKey != "" && snapshotKey == key {
+			return cbkt.Put(DevboxKeySnapshotKey, []byte(""))
+		}
+		return nil
 	})
 	if err != nil {
 		return "", err
@@ -584,7 +614,47 @@ func GetDevboxLvName(ctx context.Context, contentID, snapshotKey string) (string
 	return lvName, nil
 }
 
-// GetDevboxLvNames returns all active devbox LV names keyed by LV name.
+// GetRemovedDevboxContents returns removed devbox contents that are no longer
+// attached to any snapshot and are ready for LV cleanup.
+func GetRemovedDevboxContents(ctx context.Context) ([]RemovedDevboxContent, error) {
+	var contents []RemovedDevboxContent
+	err := withBucket(ctx, func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
+		root := pbkt.Bucket(DevboxStoragePathBucket)
+		if root == nil {
+			return nil
+		}
+		return root.ForEach(func(k, v []byte) error {
+			if v != nil {
+				return nil
+			}
+			cbkt := root.Bucket(k)
+			if cbkt == nil {
+				return nil
+			}
+			if status := cbkt.Get(DevboxKeyStatus); string(status) != string(DevboxStatusRemoved) {
+				return nil
+			}
+			if snapshotKey := cbkt.Get(DevboxKeySnapshotKey); len(snapshotKey) > 0 {
+				return nil
+			}
+			lvName := string(cbkt.Get(DevboxKeyLvName))
+			if lvName == "" {
+				return nil
+			}
+			contents = append(contents, RemovedDevboxContent{
+				ContentID: string(k),
+				LVName:    lvName,
+			})
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return contents, nil
+}
+
+// GetDevboxLvNames returns all devbox LV names keyed by LV name.
 func GetDevboxLvNames(ctx context.Context) (map[string]struct{}, error) {
 	names := map[string]struct{}{}
 	err := withBucket(ctx, func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
@@ -600,9 +670,6 @@ func GetDevboxLvNames(ctx context.Context) (map[string]struct{}, error) {
 			if cbkt == nil {
 				return nil
 			}
-			if status := cbkt.Get(DevboxKeyStatus); len(status) > 0 && string(status) == string(DevboxStatusRemoved) {
-				return nil
-			}
 			lvName := string(cbkt.Get(DevboxKeyLvName))
 			if lvName != "" {
 				names[lvName] = struct{}{}
@@ -613,7 +680,17 @@ func GetDevboxLvNames(ctx context.Context) (map[string]struct{}, error) {
 	return names, err
 }
 
-// SetUnmountedWithKey marks the devbox content for a snapshot as unmounted and
+func DeleteDevboxContent(ctx context.Context, contentID string) error {
+	return withBucket(ctx, func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
+		root := pbkt.Bucket(DevboxStoragePathBucket)
+		if root == nil {
+			return errdefs.ErrNotFound
+		}
+		return root.DeleteBucket([]byte(contentID))
+	})
+}
+
+// SetUnmountedWithKey clears the snapshot association for a devbox content and
 // returns the recorded mount path.
 func SetUnmountedWithKey(ctx context.Context, key string) (string, error) {
 	var mountPath string
@@ -636,7 +713,10 @@ func SetUnmountedWithKey(ctx context.Context, key string) (string, error) {
 			return errdefs.ErrNotFound
 		}
 		mountPath = string(cbkt.Get(DevboxKeyPath))
-		return cbkt.Put(DevboxKeyStatus, DevboxStatusRemoved)
+		if snapshotKey := cbkt.Get(DevboxKeySnapshotKey); len(snapshotKey) > 0 && string(snapshotKey) == key {
+			return cbkt.Put(DevboxKeySnapshotKey, []byte(""))
+		}
+		return nil
 	})
 	if err != nil {
 		return "", err
@@ -664,34 +744,52 @@ func withBucket(ctx context.Context, fn func(context.Context, *bolt.Bucket, *bol
 	if !ok || tx == nil {
 		return ErrNoTransaction
 	}
+	version := tx.Bucket(bucketKeyStorageVersion)
+	if version == nil {
+		return fmt.Errorf("bucket does not exist: %w", errdefs.ErrNotFound)
+	}
+	return fn(ctx, version.Bucket(bucketKeySnapshot), version.Bucket(bucketKeyParents))
+}
+
+func createBucketIfNotExists(ctx context.Context, fn func(context.Context, *bolt.Bucket, *bolt.Bucket) error) error {
+	tx, ok := ctx.Value(transactionKey{}).(*bolt.Tx)
+	if !ok || tx == nil {
+		return ErrNoTransaction
+	}
 
 	version, err := tx.CreateBucketIfNotExists(bucketKeyStorageVersion)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create version bucket: %w", err)
 	}
 	bkt, err := version.CreateBucketIfNotExists(bucketKeySnapshot)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create snapshots bucket: %w", err)
 	}
 	pbkt, err := version.CreateBucketIfNotExists(bucketKeyParents)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create parents bucket: %w", err)
 	}
 	return fn(ctx, bkt, pbkt)
 }
 
-func createBucketIfNotExists(ctx context.Context, fn func(context.Context, *bolt.Bucket, *bolt.Bucket) error) error {
-	return withBucket(ctx, fn)
-}
-
 func withSnapshotBucket(ctx context.Context, key string, fn func(context.Context, *bolt.Bucket, *bolt.Bucket) error) error {
-	return withBucket(ctx, func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
-		sbkt := bkt.Bucket([]byte(key))
-		if sbkt == nil {
-			return fmt.Errorf("snapshot %q does not exist: %w", key, errdefs.ErrNotFound)
-		}
-		return fn(ctx, sbkt, pbkt)
-	})
+	tx, ok := ctx.Value(transactionKey{}).(*bolt.Tx)
+	if !ok || tx == nil {
+		return ErrNoTransaction
+	}
+	version := tx.Bucket(bucketKeyStorageVersion)
+	if version == nil {
+		return fmt.Errorf("bucket does not exist: %w", errdefs.ErrNotFound)
+	}
+	bkt := version.Bucket(bucketKeySnapshot)
+	if bkt == nil {
+		return fmt.Errorf("snapshots bucket does not exist: %w", errdefs.ErrNotFound)
+	}
+	sbkt := bkt.Bucket([]byte(key))
+	if sbkt == nil {
+		return fmt.Errorf("snapshot %q does not exist: %w", key, errdefs.ErrNotFound)
+	}
+	return fn(ctx, sbkt, version.Bucket(bucketKeyParents))
 }
 
 func sequenceNext(bkt *bolt.Bucket) (uint64, error) {

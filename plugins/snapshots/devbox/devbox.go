@@ -368,8 +368,8 @@ func (o *Snapshotter) RemoveDir(ctx context.Context, dir string) {
 
 func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	var (
-		removals       []string
-		removedLvNames []string
+		removals        []string
+		removedContents []storage.RemovedDevboxContent
 	)
 
 	log.G(ctx).WithFields(logrus.Fields{
@@ -381,13 +381,28 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 			for _, dir := range removals {
 				o.RemoveDir(ctx, dir)
 			}
-			for _, lvName := range removedLvNames {
-				err := o.removeLv(ctx, lvName)
+			for _, content := range removedContents {
+				err := o.removeLv(ctx, content.LVName)
 				if err != nil {
-					log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("Remove: failed to destroy LVM logical volume")
+					log.G(ctx).WithError(err).WithFields(logrus.Fields{
+						"lvName":    content.LVName,
+						"contentID": content.ContentID,
+					}).Warn("Remove: failed to destroy LVM logical volume")
+					if !isLVNotFoundError(err) {
+						continue
+					}
+				}
+				if cleanupErr := o.deleteDevboxContent(ctx, content.ContentID); cleanupErr != nil {
+					log.G(ctx).WithError(cleanupErr).WithFields(logrus.Fields{
+						"lvName":    content.LVName,
+						"contentID": content.ContentID,
+					}).Warn("Remove: failed to delete devbox content metadata")
 					continue
 				}
-				log.G(ctx).Infof("Remove: LVM logical volume %s removed successfully", lvName)
+				log.G(ctx).WithFields(logrus.Fields{
+					"lvName":    content.LVName,
+					"contentID": content.ContentID,
+				}).Info("Remove: devbox content cleanup completed")
 			}
 		}
 	}()
@@ -423,9 +438,9 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 			if err != nil {
 				return fmt.Errorf("unable to get directories for removal: %w", err)
 			}
-			removedLvNames, err = o.getCleanupLvNames(ctx)
+			removedContents, err = o.getCleanupRemovedContents(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to get LVM logical volume names for snapshot %s: %w", key, err)
+				return fmt.Errorf("failed to get removable devbox contents for snapshot %s: %w", key, err)
 			}
 		}
 		return nil
@@ -455,7 +470,7 @@ func (o *Snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 // Cleanup cleans up disk resources from removed or abandoned snapshots.
 func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	log.G(ctx).Info("Cleanup called")
-	cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
+	cleanup, removedContents, err := o.cleanupDirectories(ctx)
 	if err != nil {
 		return err
 	}
@@ -464,29 +479,43 @@ func (o *Snapshotter) Cleanup(ctx context.Context) error {
 		o.RemoveDir(ctx, dir)
 	}
 
-	for _, lvName := range cleanupLv {
-
-		if err := o.removeLv(ctx, lvName); err != nil {
-			log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("Cleanup: failed to destroy LVM logical volume")
+	for _, content := range removedContents {
+		if err := o.removeLv(ctx, content.LVName); err != nil {
+			log.G(ctx).WithError(err).WithFields(logrus.Fields{
+				"lvName":    content.LVName,
+				"contentID": content.ContentID,
+			}).Warn("Cleanup: failed to destroy LVM logical volume")
+			if !isLVNotFoundError(err) {
+				continue
+			}
+		}
+		if err := o.deleteDevboxContent(ctx, content.ContentID); err != nil {
+			log.G(ctx).WithError(err).WithFields(logrus.Fields{
+				"lvName":    content.LVName,
+				"contentID": content.ContentID,
+			}).Warn("Cleanup: failed to delete devbox content metadata")
 			continue
 		}
-		log.G(ctx).Infof("Cleanup: LVM logical volume %s removed successfully", lvName)
+		log.G(ctx).WithFields(logrus.Fields{
+			"lvName":    content.LVName,
+			"contentID": content.ContentID,
+		}).Info("Cleanup: devbox content cleanup completed")
 	}
 
 	return nil
 }
 
-func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []string, err error) {
+func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []storage.RemovedDevboxContent, err error) {
 	var (
-		cleanupDirs    []string
-		removedLvNames []string
+		cleanupDirs     []string
+		removedContents []storage.RemovedDevboxContent
 	)
 	if err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		cleanupDirs, err = o.getCleanupDirectories(ctx)
 		if err != nil {
 			return err
 		}
-		removedLvNames, err = o.getCleanupLvNames(ctx)
+		removedContents, err = o.getCleanupRemovedContents(ctx)
 		if err != nil {
 			return err
 		}
@@ -496,26 +525,26 @@ func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []s
 	}
 
 	// Unmount any mounted LVs
-	for _, lvName := range removedLvNames {
-		devicePath := fmt.Sprintf("/dev/%s/%s", o.lvmVgName, lvName)
+	for _, content := range removedContents {
+		devicePath := o.devicePath(content.LVName)
 		mountPoints, err := findMountPointByDevice(devicePath)
 		if err != nil {
-			log.G(ctx).WithError(err).WithField("lvName", lvName).WithField("devicePath", devicePath).
+			log.G(ctx).WithError(err).WithField("lvName", content.LVName).WithField("devicePath", devicePath).
 				Warn("Cleanup: failed to find mount point for LV, continuing")
 			continue
 		}
 		for _, mountPoint := range mountPoints {
 			if err := o.unmountLvm(ctx, mountPoint); err != nil {
-				log.G(ctx).WithError(err).WithField("lvName", lvName).WithField("mountPoint", mountPoint).
+				log.G(ctx).WithError(err).WithField("lvName", content.LVName).WithField("mountPoint", mountPoint).
 					Warn("Cleanup: failed to unmount LV, will retry on next cleanup")
 				// Continue to try to unmount other mount points
 			} else {
-				log.G(ctx).Infof("Cleanup: successfully unmounted LV %s from %s", lvName, mountPoint)
+				log.G(ctx).Infof("Cleanup: successfully unmounted LV %s from %s", content.LVName, mountPoint)
 			}
 		}
 	}
 
-	return cleanupDirs, removedLvNames, nil
+	return cleanupDirs, removedContents, nil
 }
 
 func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
@@ -547,28 +576,27 @@ func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, erro
 	return cleanup, nil
 }
 
-func (o *Snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
-	nameMap, err := storage.GetDevboxLvNames(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (o *Snapshotter) getCleanupRemovedContents(ctx context.Context) ([]storage.RemovedDevboxContent, error) {
+	return storage.GetRemovedDevboxContents(ctx)
+}
 
-	lvs, err := lvm.ListLVMLogicalVolumeByVG(ctx, o.lvmVgName, o.ThinPoolName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list LVM logical volumes: %w", err)
-	}
+func (o *Snapshotter) devicePath(lvName string) string {
+	return fmt.Sprintf("/dev/%s/%s", o.lvmVgName, lvName)
+}
 
-	cleanup := []string{}
-	for _, d := range lvs {
-		if _, ok := nameMap[d.Name]; ok {
-			continue
-		}
-		if strings.HasPrefix(d.Name, "devbox") {
-			cleanup = append(cleanup, d.Name)
-		}
-	}
+func (o *Snapshotter) deleteDevboxContent(ctx context.Context, contentID string) error {
+	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+		return storage.DeleteDevboxContent(ctx, contentID)
+	})
+}
 
-	return cleanup, nil
+func isLVNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "not found in volume group") ||
+		strings.Contains(errMsg, "Failed to find logical volume")
 }
 
 func (o *Snapshotter) resizeLVMVolume(ctx context.Context, lvName, useLimit string) error {
