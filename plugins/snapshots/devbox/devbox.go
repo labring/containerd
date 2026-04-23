@@ -137,6 +137,39 @@ type Snapshotter struct {
 	options       []string
 }
 
+type devboxLVMPlan struct {
+	reuseExisting  bool
+	resizeExisting bool
+	createNew      bool
+	contentID      string
+	useLimit       string
+	existingLVName string
+}
+
+func planDevboxLVM(
+	contentID, useLimit, existingLVName string,
+	contentIDProvided, storageLimitProvided bool,
+) devboxLVMPlan {
+	plan := devboxLVMPlan{
+		contentID:      strings.TrimSpace(contentID),
+		useLimit:       strings.TrimSpace(useLimit),
+		existingLVName: strings.TrimSpace(existingLVName),
+	}
+
+	if !contentIDProvided || plan.contentID == "" {
+		return plan
+	}
+	if plan.existingLVName != "" {
+		plan.reuseExisting = true
+		plan.resizeExisting = storageLimitProvided && plan.useLimit != ""
+		return plan
+	}
+	if storageLimitProvided && plan.useLimit != "" {
+		plan.createNew = true
+	}
+	return plan
+}
+
 // NewSnapshotter returns a Snapshotter which uses overlayfs. The overlayfs
 // diffs are stored under the provided root. A metadata file is stored under
 // the root.
@@ -807,35 +840,43 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 		npath = filepath.Join(snapshotDir, s.ID)
 
-		if idOk && limitOk {
+		var plan devboxLVMPlan
+		if idOk {
 			var notExistErr error
 			lvName, notExistErr = storage.GetDevboxLvName(ctx, contentID, "")
-			if notExistErr == nil && lvName != "" {
-				var isMounted bool
-				if isMounted, err = isMountPoint(npath); err != nil {
-					return fmt.Errorf("failed to check if path is a mount point: %w", err)
-				} else if isMounted {
-					log.G(ctx).Infof("Path %s is already mounted, skipping mount", npath)
-				} else {
-					if err = o.resizeLVMVolume(ctx, lvName, useLimit); err != nil {
-						return fmt.Errorf("failed to resize LVM logical volume %s: %w", lvName, err)
-					}
-
-					if err = storage.SetDevboxContent(ctx, key, contentID, lvName, npath); err != nil {
-						return fmt.Errorf("failed to set devbox content: %w", err)
-					}
-
-					if err = o.mountLvm(ctx, lvName, npath); err != nil {
-						return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
-					}
-					path = npath
-				}
-				return nil
-			} else if notExistErr != errdefs.ErrNotFound {
+			if notExistErr != nil && notExistErr != errdefs.ErrNotFound {
 				return fmt.Errorf("failed to get LVM logical volume name for key %s: %w", contentID, notExistErr)
 			}
+			plan = planDevboxLVM(contentID, useLimit, lvName, idOk, limitOk)
+		}
 
-			td, lvName, err = o.prepareLvmDirectory(ctx, snapshotDir, contentID, useLimit)
+		if plan.reuseExisting {
+			var isMounted bool
+			if isMounted, err = isMountPoint(npath); err != nil {
+				return fmt.Errorf("failed to check if path is a mount point: %w", err)
+			} else if isMounted {
+				log.G(ctx).Infof("Path %s is already mounted, skipping mount", npath)
+			} else {
+				if plan.resizeExisting {
+					if err = o.resizeLVMVolume(ctx, plan.existingLVName, plan.useLimit); err != nil {
+						return fmt.Errorf("failed to resize LVM logical volume %s: %w", plan.existingLVName, err)
+					}
+				}
+
+				if err = storage.SetDevboxContent(ctx, key, plan.contentID, plan.existingLVName, npath); err != nil {
+					return fmt.Errorf("failed to set devbox content: %w", err)
+				}
+
+				if err = o.mountLvm(ctx, plan.existingLVName, npath); err != nil {
+					return fmt.Errorf("failed to mount LVM logical volume %s: %w", plan.existingLVName, err)
+				}
+				path = npath
+			}
+			return nil
+		}
+
+		if plan.createNew {
+			td, lvName, err = o.prepareLvmDirectory(ctx, snapshotDir, plan.contentID, plan.useLimit)
 			defer func() {
 				if err != nil {
 					mountPath, err := storage.RemoveDevbox(ctx, key)
@@ -896,7 +937,7 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			}
 		}
 
-		if idOk && limitOk {
+		if plan.createNew {
 			err = o.unmountLvm(ctx, td)
 			if err != nil {
 				return fmt.Errorf("failed to unmount LVM logical volume %s: %w", lvName, err)
