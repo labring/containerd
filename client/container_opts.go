@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/content"
@@ -51,6 +52,11 @@ type InfoConfig struct {
 	// Refresh will to a fetch of the latest container metadata
 	Refresh bool
 }
+
+const (
+	devboxAnnotationPrefix    = "devbox.sealos.io/"
+	devboxSnapshotLabelPrefix = "containerd.io/snapshot/devbox-"
+)
 
 // WithRuntime allows a user to specify the runtime name and additional options that should
 // be used to create tasks for the container
@@ -255,10 +261,15 @@ func withNewSnapshot(id string, i Image, readonly bool, opts ...snapshots.Opt) N
 			return err
 		}
 
+		startOpts, err := withDevboxSnapshotLabels(opts...)
+		if err != nil {
+			return err
+		}
+
 		if readonly {
-			_, err = s.View(ctx, id, parent, opts...)
+			_, err = s.View(ctx, id, parent, startOpts...)
 		} else {
-			_, err = s.Prepare(ctx, id, parent, opts...)
+			_, err = s.Prepare(ctx, id, parent, startOpts...)
 		}
 		if err != nil {
 			return err
@@ -267,6 +278,30 @@ func withNewSnapshot(id string, i Image, readonly bool, opts ...snapshots.Opt) N
 		c.Image = i.Name()
 		return nil
 	}
+}
+
+func withDevboxSnapshotLabels(opts ...snapshots.Opt) ([]snapshots.Opt, error) {
+	base := snapshots.Info{}
+	for _, opt := range opts {
+		if err := opt(&base); err != nil {
+			return nil, fmt.Errorf("error applying snapshot option: %w", err)
+		}
+	}
+
+	translated := make(map[string]string)
+	for label, value := range base.Labels {
+		if strings.HasPrefix(label, devboxAnnotationPrefix) {
+			translated[devboxSnapshotLabelPrefix+label[len(devboxAnnotationPrefix):]] = value
+		}
+	}
+	if len(translated) == 0 {
+		return opts, nil
+	}
+
+	startOpts := make([]snapshots.Opt, 0, len(opts)+1)
+	startOpts = append(startOpts, snapshots.WithLabels(translated))
+	startOpts = append(startOpts, opts...)
+	return startOpts, nil
 }
 
 // WithContainerExtension appends extension data to the container object.

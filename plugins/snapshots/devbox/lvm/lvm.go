@@ -139,6 +139,10 @@ func NewExecError(output []byte, err error) error {
 
 // buildLVMCreateArgs returns lvcreate arguments for the volume.
 func buildLVMCreateArgs(ctx context.Context, vol *apis.LVMVolume) []string {
+	return buildLVMCreateArgsWithThinPool(ctx, vol, lvThinExists(ctx, vol.Spec.VolGroup, vol.Spec.ThinProvision))
+}
+
+func buildLVMCreateArgsWithThinPool(ctx context.Context, vol *apis.LVMVolume, thinPoolExists bool) []string {
 	var args []string
 
 	volume := vol.Name
@@ -148,7 +152,7 @@ func buildLVMCreateArgs(ctx context.Context, vol *apis.LVMVolume) []string {
 	if len(vol.Spec.Capacity) != 0 {
 		if strings.TrimSpace(vol.Spec.ThinProvision) == "" {
 			args = append(args, "-L", size)
-		} else if !lvThinExists(ctx, vol.Spec.VolGroup, pool) {
+		} else if !thinPoolExists {
 			args = append(args, "-L", getThinPoolSize(ctx, vol.Spec.VolGroup, vol.Spec.Capacity))
 		}
 	}
@@ -158,7 +162,10 @@ func buildLVMCreateArgs(ctx context.Context, vol *apis.LVMVolume) []string {
 	}
 
 	args = append(args, "-n", volume)
-	args = append(args, vol.Spec.VolGroup)
+	if strings.TrimSpace(vol.Spec.ThinProvision) == "" {
+		args = append(args, vol.Spec.VolGroup)
+	}
+	args = append(args, "-y")
 
 	return args
 }
@@ -320,17 +327,14 @@ func lvThinExists(ctx context.Context, vgName, thinPoolName string) bool {
 	if strings.TrimSpace(thinPoolName) == "" {
 		return false
 	}
-	lvs, err := ListLVMLogicalVolumeByVG(ctx, vgName, "")
+
+	output, _, err := RunCommandSplit(ctx, LVList, vgName+"/"+thinPoolName, "--noheadings", "-o", LVName)
 	if err != nil {
-		klog.Warningf("failed to list lvm logical volumes for vg %q: %v", vgName, err)
+		klog.Warningf("failed to check thin pool %q in vg %q: %v", thinPoolName, vgName, err)
 		return false
 	}
-	for _, lv := range lvs {
-		if lv.Name == thinPoolName && lv.SegType == LVThinPool {
-			return true
-		}
-	}
-	return false
+
+	return strings.TrimSpace(string(output)) == thinPoolName
 }
 
 func getThinPoolSize(ctx context.Context, vgName, requested string) string {

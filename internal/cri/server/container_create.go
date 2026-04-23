@@ -40,6 +40,7 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/internal/cri/annotations"
 	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
+	"github.com/containerd/containerd/v2/internal/cri/devboxsnapshotter"
 	cio "github.com/containerd/containerd/v2/internal/cri/io"
 	crilabels "github.com/containerd/containerd/v2/internal/cri/labels"
 	customopts "github.com/containerd/containerd/v2/internal/cri/opts"
@@ -58,12 +59,15 @@ func init() {
 }
 
 func devboxSnapshotterOpts(config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
-	labels := make(map[string]string)
-	if config != nil {
-		for k, v := range config.Annotations {
-			labels[k] = v
-		}
+	if config == nil {
+		return nil, nil
 	}
+
+	labels := devboxsnapshotter.LabelsFromAnnotations(config.Annotations)
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
 	return snapshots.WithLabels(labels), nil
 }
 
@@ -360,8 +364,8 @@ func (c *criService) createContainer(r *createContainerRequest) (_ string, retEr
 		return "", err
 	}
 
-	// Check if the snapshotter is devbox and add the devbox snapshotter opts.
-	if c.RuntimeSnapshotter(r.ctx, ociRuntime) == "devbox" {
+	runtimeSnapshotter := c.RuntimeSnapshotter(r.ctx, ociRuntime)
+	if devboxsnapshotter.IsWritableSnapshotter(runtimeSnapshotter) {
 		devboxOpt, err := devboxSnapshotterOpts(r.podSandboxConfig)
 		if err != nil {
 			return "", err
@@ -373,7 +377,7 @@ func (c *criService) createContainer(r *createContainerRequest) (_ string, retEr
 
 	// Set snapshotter before any other options.
 	opts := []containerd.NewContainerOpts{
-		containerd.WithSnapshotter(c.RuntimeSnapshotter(r.ctx, ociRuntime)),
+		containerd.WithSnapshotter(runtimeSnapshotter),
 		// Prepare container rootfs. This is always writeable even if
 		// the container wants a readonly rootfs since we want to give
 		// the runtime (runc) a chance to modify (e.g. to create mount

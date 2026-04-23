@@ -50,6 +50,7 @@ import (
 	"github.com/containerd/containerd/v2/core/transfer/registry"
 	"github.com/containerd/containerd/v2/internal/cri/annotations"
 	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
+	"github.com/containerd/containerd/v2/internal/cri/devboxsnapshotter"
 	crilabels "github.com/containerd/containerd/v2/internal/cri/labels"
 	"github.com/containerd/containerd/v2/internal/cri/util"
 	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
@@ -206,7 +207,7 @@ func (c *CRIImageService) PullImage(ctx context.Context, name string, credential
 		}
 
 		var imageLabels map[string]string
-		if r == repoTag && snapshotter == "devbox" {
+		if r == repoTag && devboxsnapshotter.IsWritableSnapshotter(snapshotter) {
 			imageLabels = make(map[string]string)
 			for k, v := range labels {
 				imageLabels[k] = v

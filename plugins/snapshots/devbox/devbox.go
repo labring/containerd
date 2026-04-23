@@ -137,6 +137,39 @@ type Snapshotter struct {
 	options       []string
 }
 
+type devboxLVMPlan struct {
+	reuseExisting  bool
+	resizeExisting bool
+	createNew      bool
+	contentID      string
+	useLimit       string
+	existingLVName string
+}
+
+func planDevboxLVM(
+	contentID, useLimit, existingLVName string,
+	contentIDProvided, storageLimitProvided bool,
+) devboxLVMPlan {
+	plan := devboxLVMPlan{
+		contentID:      strings.TrimSpace(contentID),
+		useLimit:       strings.TrimSpace(useLimit),
+		existingLVName: strings.TrimSpace(existingLVName),
+	}
+
+	if !contentIDProvided || plan.contentID == "" {
+		return plan
+	}
+	if plan.existingLVName != "" {
+		plan.reuseExisting = true
+		plan.resizeExisting = storageLimitProvided && plan.useLimit != ""
+		return plan
+	}
+	if storageLimitProvided && plan.useLimit != "" {
+		plan.createNew = true
+	}
+	return plan
+}
+
 // NewSnapshotter returns a Snapshotter which uses overlayfs. The overlayfs
 // diffs are stored under the provided root. A metadata file is stored under
 // the root.
@@ -232,6 +265,9 @@ func (o *Snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpath
 			mountPath, err := storage.SetUnmountedWithKey(ctx, info.Name)
 			if err != nil {
 				return fmt.Errorf("failed to set devbox content status to unmounted: %w", err)
+			}
+			if mountPath == "" {
+				return nil
 			}
 			return o.unmountLvm(ctx, mountPath)
 		}
@@ -368,8 +404,8 @@ func (o *Snapshotter) RemoveDir(ctx context.Context, dir string) {
 
 func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 	var (
-		removals       []string
-		removedLvNames []string
+		removals        []string
+		removedContents []storage.RemovedDevboxContent
 	)
 
 	log.G(ctx).WithFields(logrus.Fields{
@@ -381,13 +417,28 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 			for _, dir := range removals {
 				o.RemoveDir(ctx, dir)
 			}
-			for _, lvName := range removedLvNames {
-				err := o.removeLv(ctx, lvName)
+			for _, content := range removedContents {
+				err := o.removeLv(ctx, content.LVName)
 				if err != nil {
-					log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("Remove: failed to destroy LVM logical volume")
+					log.G(ctx).WithError(err).WithFields(logrus.Fields{
+						"lvName":    content.LVName,
+						"contentID": content.ContentID,
+					}).Warn("Remove: failed to destroy LVM logical volume")
+					if !isLVNotFoundError(err) {
+						continue
+					}
+				}
+				if cleanupErr := o.deleteDevboxContent(ctx, content.ContentID); cleanupErr != nil {
+					log.G(ctx).WithError(cleanupErr).WithFields(logrus.Fields{
+						"lvName":    content.LVName,
+						"contentID": content.ContentID,
+					}).Warn("Remove: failed to delete devbox content metadata")
 					continue
 				}
-				log.G(ctx).Infof("Remove: LVM logical volume %s removed successfully", lvName)
+				log.G(ctx).WithFields(logrus.Fields{
+					"lvName":    content.LVName,
+					"contentID": content.ContentID,
+				}).Info("Remove: devbox content cleanup completed")
 			}
 		}
 	}()
@@ -423,9 +474,9 @@ func (o *Snapshotter) Remove(ctx context.Context, key string) (err error) {
 			if err != nil {
 				return fmt.Errorf("unable to get directories for removal: %w", err)
 			}
-			removedLvNames, err = o.getCleanupLvNames(ctx)
+			removedContents, err = o.getCleanupRemovedContents(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to get LVM logical volume names for snapshot %s: %w", key, err)
+				return fmt.Errorf("failed to get removable devbox contents for snapshot %s: %w", key, err)
 			}
 		}
 		return nil
@@ -455,7 +506,7 @@ func (o *Snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 // Cleanup cleans up disk resources from removed or abandoned snapshots.
 func (o *Snapshotter) Cleanup(ctx context.Context) error {
 	log.G(ctx).Info("Cleanup called")
-	cleanup, cleanupLv, err := o.cleanupDirectories(ctx)
+	cleanup, removedContents, err := o.cleanupDirectories(ctx)
 	if err != nil {
 		return err
 	}
@@ -464,29 +515,43 @@ func (o *Snapshotter) Cleanup(ctx context.Context) error {
 		o.RemoveDir(ctx, dir)
 	}
 
-	for _, lvName := range cleanupLv {
-
-		if err := o.removeLv(ctx, lvName); err != nil {
-			log.G(ctx).WithError(err).WithField("lvName", lvName).Warn("Cleanup: failed to destroy LVM logical volume")
+	for _, content := range removedContents {
+		if err := o.removeLv(ctx, content.LVName); err != nil {
+			log.G(ctx).WithError(err).WithFields(logrus.Fields{
+				"lvName":    content.LVName,
+				"contentID": content.ContentID,
+			}).Warn("Cleanup: failed to destroy LVM logical volume")
+			if !isLVNotFoundError(err) {
+				continue
+			}
+		}
+		if err := o.deleteDevboxContent(ctx, content.ContentID); err != nil {
+			log.G(ctx).WithError(err).WithFields(logrus.Fields{
+				"lvName":    content.LVName,
+				"contentID": content.ContentID,
+			}).Warn("Cleanup: failed to delete devbox content metadata")
 			continue
 		}
-		log.G(ctx).Infof("Cleanup: LVM logical volume %s removed successfully", lvName)
+		log.G(ctx).WithFields(logrus.Fields{
+			"lvName":    content.LVName,
+			"contentID": content.ContentID,
+		}).Info("Cleanup: devbox content cleanup completed")
 	}
 
 	return nil
 }
 
-func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []string, err error) {
+func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []storage.RemovedDevboxContent, err error) {
 	var (
-		cleanupDirs    []string
-		removedLvNames []string
+		cleanupDirs     []string
+		removedContents []storage.RemovedDevboxContent
 	)
 	if err = o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
 		cleanupDirs, err = o.getCleanupDirectories(ctx)
 		if err != nil {
 			return err
 		}
-		removedLvNames, err = o.getCleanupLvNames(ctx)
+		removedContents, err = o.getCleanupRemovedContents(ctx)
 		if err != nil {
 			return err
 		}
@@ -496,26 +561,26 @@ func (o *Snapshotter) cleanupDirectories(ctx context.Context) (_ []string, _ []s
 	}
 
 	// Unmount any mounted LVs
-	for _, lvName := range removedLvNames {
-		devicePath := fmt.Sprintf("/dev/%s/%s", o.lvmVgName, lvName)
+	for _, content := range removedContents {
+		devicePath := o.devicePath(content.LVName)
 		mountPoints, err := findMountPointByDevice(devicePath)
 		if err != nil {
-			log.G(ctx).WithError(err).WithField("lvName", lvName).WithField("devicePath", devicePath).
+			log.G(ctx).WithError(err).WithField("lvName", content.LVName).WithField("devicePath", devicePath).
 				Warn("Cleanup: failed to find mount point for LV, continuing")
 			continue
 		}
 		for _, mountPoint := range mountPoints {
 			if err := o.unmountLvm(ctx, mountPoint); err != nil {
-				log.G(ctx).WithError(err).WithField("lvName", lvName).WithField("mountPoint", mountPoint).
+				log.G(ctx).WithError(err).WithField("lvName", content.LVName).WithField("mountPoint", mountPoint).
 					Warn("Cleanup: failed to unmount LV, will retry on next cleanup")
 				// Continue to try to unmount other mount points
 			} else {
-				log.G(ctx).Infof("Cleanup: successfully unmounted LV %s from %s", lvName, mountPoint)
+				log.G(ctx).Infof("Cleanup: successfully unmounted LV %s from %s", content.LVName, mountPoint)
 			}
 		}
 	}
 
-	return cleanupDirs, removedLvNames, nil
+	return cleanupDirs, removedContents, nil
 }
 
 func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
@@ -547,28 +612,27 @@ func (o *Snapshotter) getCleanupDirectories(ctx context.Context) ([]string, erro
 	return cleanup, nil
 }
 
-func (o *Snapshotter) getCleanupLvNames(ctx context.Context) ([]string, error) {
-	nameMap, err := storage.GetDevboxLvNames(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (o *Snapshotter) getCleanupRemovedContents(ctx context.Context) ([]storage.RemovedDevboxContent, error) {
+	return storage.GetRemovedDevboxContents(ctx)
+}
 
-	lvs, err := lvm.ListLVMLogicalVolumeByVG(ctx, o.lvmVgName, o.ThinPoolName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list LVM logical volumes: %w", err)
-	}
+func (o *Snapshotter) devicePath(lvName string) string {
+	return fmt.Sprintf("/dev/%s/%s", o.lvmVgName, lvName)
+}
 
-	cleanup := []string{}
-	for _, d := range lvs {
-		if _, ok := nameMap[d.Name]; ok {
-			continue
-		}
-		if strings.HasPrefix(d.Name, "devbox") {
-			cleanup = append(cleanup, d.Name)
-		}
-	}
+func (o *Snapshotter) deleteDevboxContent(ctx context.Context, contentID string) error {
+	return o.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+		return storage.DeleteDevboxContent(ctx, contentID)
+	})
+}
 
-	return cleanup, nil
+func isLVNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "not found in volume group") ||
+		strings.Contains(errMsg, "Failed to find logical volume")
 }
 
 func (o *Snapshotter) resizeLVMVolume(ctx context.Context, lvName, useLimit string) error {
@@ -779,35 +843,43 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 		npath = filepath.Join(snapshotDir, s.ID)
 
-		if idOk && limitOk {
+		var plan devboxLVMPlan
+		if idOk {
 			var notExistErr error
 			lvName, notExistErr = storage.GetDevboxLvName(ctx, contentID, "")
-			if notExistErr == nil && lvName != "" {
-				var isMounted bool
-				if isMounted, err = isMountPoint(npath); err != nil {
-					return fmt.Errorf("failed to check if path is a mount point: %w", err)
-				} else if isMounted {
-					log.G(ctx).Infof("Path %s is already mounted, skipping mount", npath)
-				} else {
-					if err = o.resizeLVMVolume(ctx, lvName, useLimit); err != nil {
-						return fmt.Errorf("failed to resize LVM logical volume %s: %w", lvName, err)
-					}
-
-					if err = storage.SetDevboxContent(ctx, key, contentID, lvName, npath); err != nil {
-						return fmt.Errorf("failed to set devbox content: %w", err)
-					}
-
-					if err = o.mountLvm(ctx, lvName, npath); err != nil {
-						return fmt.Errorf("failed to mount LVM logical volume %s: %w", lvName, err)
-					}
-					path = npath
-				}
-				return nil
-			} else if notExistErr != errdefs.ErrNotFound {
+			if notExistErr != nil && notExistErr != errdefs.ErrNotFound {
 				return fmt.Errorf("failed to get LVM logical volume name for key %s: %w", contentID, notExistErr)
 			}
+			plan = planDevboxLVM(contentID, useLimit, lvName, idOk, limitOk)
+		}
 
-			td, lvName, err = o.prepareLvmDirectory(ctx, snapshotDir, contentID, useLimit)
+		if plan.reuseExisting {
+			var isMounted bool
+			if isMounted, err = isMountPoint(npath); err != nil {
+				return fmt.Errorf("failed to check if path is a mount point: %w", err)
+			} else if isMounted {
+				log.G(ctx).Infof("Path %s is already mounted, skipping mount", npath)
+			} else {
+				if plan.resizeExisting {
+					if err = o.resizeLVMVolume(ctx, plan.existingLVName, plan.useLimit); err != nil {
+						return fmt.Errorf("failed to resize LVM logical volume %s: %w", plan.existingLVName, err)
+					}
+				}
+
+				if err = storage.SetDevboxContent(ctx, key, plan.contentID, plan.existingLVName, npath); err != nil {
+					return fmt.Errorf("failed to set devbox content: %w", err)
+				}
+
+				if err = o.mountLvm(ctx, plan.existingLVName, npath); err != nil {
+					return fmt.Errorf("failed to mount LVM logical volume %s: %w", plan.existingLVName, err)
+				}
+				path = npath
+			}
+			return nil
+		}
+
+		if plan.createNew {
+			td, lvName, err = o.prepareLvmDirectory(ctx, snapshotDir, plan.contentID, plan.useLimit)
 			defer func() {
 				if err != nil {
 					mountPath, err := storage.RemoveDevbox(ctx, key)
@@ -868,7 +940,7 @@ func (o *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			}
 		}
 
-		if idOk && limitOk {
+		if plan.createNew {
 			err = o.unmountLvm(ctx, td)
 			if err != nil {
 				return fmt.Errorf("failed to unmount LVM logical volume %s: %w", lvName, err)
@@ -995,13 +1067,14 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 			ThinProvision: o.ThinPoolName,
 		},
 	}
-	// Track mount status for cleanup
-	// Track mount status for cleanup
+	// Track whether this helper created and mounted the LV so cleanup
+	// won't tear down pre-existing volumes on unrelated errors.
+	lvCreated := false
 	mounted := false
 
 	// Defer cleanup: unmount and force remove LV if any step fails
 	defer func() {
-		if err != nil {
+		if err != nil && lvCreated {
 			if mounted {
 				// Unmount first if mounted
 				if unmountErr := o.unmountLvm(ctx, td); unmountErr != nil {
@@ -1020,6 +1093,7 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 	if err != nil {
 		return td, lvName, fmt.Errorf("failed to create LVM logical volume %s: %w", lvName, err)
 	}
+	lvCreated = true
 	if err = o.mkfs(lvName); err != nil {
 		return td, lvName, fmt.Errorf("failed to create filesystem on LVM logical volume %s: %w", lvName, err)
 	}
