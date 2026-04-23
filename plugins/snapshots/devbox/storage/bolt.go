@@ -712,8 +712,8 @@ func SetUnmountedWithKey(ctx context.Context, key string) (string, error) {
 		if cbkt == nil {
 			return errdefs.ErrNotFound
 		}
-		mountPath = string(cbkt.Get(DevboxKeyPath))
 		if snapshotKey := cbkt.Get(DevboxKeySnapshotKey); len(snapshotKey) > 0 && string(snapshotKey) == key {
+			mountPath = string(cbkt.Get(DevboxKeyPath))
 			return cbkt.Put(DevboxKeySnapshotKey, []byte(""))
 		}
 		return nil

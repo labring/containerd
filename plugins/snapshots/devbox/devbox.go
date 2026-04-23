@@ -266,6 +266,9 @@ func (o *Snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpath
 			if err != nil {
 				return fmt.Errorf("failed to set devbox content status to unmounted: %w", err)
 			}
+			if mountPath == "" {
+				return nil
+			}
 			return o.unmountLvm(ctx, mountPath)
 		}
 
@@ -1064,13 +1067,14 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 			ThinProvision: o.ThinPoolName,
 		},
 	}
-	// Track mount status for cleanup
-	// Track mount status for cleanup
+	// Track whether this helper created and mounted the LV so cleanup
+	// won't tear down pre-existing volumes on unrelated errors.
+	lvCreated := false
 	mounted := false
 
 	// Defer cleanup: unmount and force remove LV if any step fails
 	defer func() {
-		if err != nil {
+		if err != nil && lvCreated {
 			if mounted {
 				// Unmount first if mounted
 				if unmountErr := o.unmountLvm(ctx, td); unmountErr != nil {
@@ -1089,6 +1093,7 @@ func (o *Snapshotter) prepareLvmDirectory(ctx context.Context, snapshotDir strin
 	if err != nil {
 		return td, lvName, fmt.Errorf("failed to create LVM logical volume %s: %w", lvName, err)
 	}
+	lvCreated = true
 	if err = o.mkfs(lvName); err != nil {
 		return td, lvName, fmt.Errorf("failed to create filesystem on LVM logical volume %s: %w", lvName, err)
 	}

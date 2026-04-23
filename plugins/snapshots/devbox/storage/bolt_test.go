@@ -276,6 +276,43 @@ func TestRemoveDevboxDoesNotReturnMountPathAfterContentReassociation(t *testing.
 	}
 }
 
+func TestSetUnmountedWithKeyDoesNotReturnMountPathAfterContentReassociation(t *testing.T) {
+	ms := newTestMetaStore(t)
+	createActiveSnapshotWithContent(t, ms, "old-key", "content-1", "devbox-content-1", "/snapshots/1")
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		if _, err := CreateSnapshot(ctx, snapshots.KindActive, "new-key", ""); err != nil {
+			return err
+		}
+		return SetDevboxContent(ctx, "new-key", "content-1", "devbox-content-1", "/snapshots/2")
+	})
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		mountPath, err := SetUnmountedWithKey(ctx, "old-key")
+		if err != nil {
+			return err
+		}
+		if mountPath != "" {
+			t.Fatalf("mountPath = %q, want empty", mountPath)
+		}
+		return nil
+	})
+
+	status, snapshotKey, mountPath, err := readContentRecord(t, ms, "content-1")
+	if err != nil {
+		t.Fatalf("readContentRecord() error = %v", err)
+	}
+	if status != string(DevboxStatusActive) {
+		t.Fatalf("status = %q, want %q", status, DevboxStatusActive)
+	}
+	if snapshotKey != "new-key" {
+		t.Fatalf("snapshotKey = %q, want %q", snapshotKey, "new-key")
+	}
+	if mountPath != "/snapshots/2" {
+		t.Fatalf("mountPath = %q, want %q", mountPath, "/snapshots/2")
+	}
+}
+
 func TestRemoveDevboxDoesNotReturnMountPathAfterSetUnmounted(t *testing.T) {
 	ms := newTestMetaStore(t)
 	createActiveSnapshotWithContent(t, ms, "active-key", "content-1", "devbox-content-1", "/snapshots/1")
