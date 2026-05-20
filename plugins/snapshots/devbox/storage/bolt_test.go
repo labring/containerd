@@ -4,6 +4,7 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 
@@ -50,8 +51,7 @@ func readContentRecord(t *testing.T, ms *MetaStore, contentID string) (status, s
 	t.Helper()
 
 	err = ms.WithTransaction(context.Background(), false, func(ctx context.Context) error {
-		return withBucket(ctx, func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
-			root := pbkt.Bucket(DevboxStoragePathBucket)
+		return withDevboxStorageBucket(ctx, func(ctx context.Context, bkt, root *bolt.Bucket) error {
 			if root == nil {
 				return errdefs.ErrNotFound
 			}
@@ -66,6 +66,175 @@ func readContentRecord(t *testing.T, ms *MetaStore, contentID string) (status, s
 		})
 	})
 	return
+}
+
+func legacyUvarint(v uint64) []byte {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], v)
+	return buf[:n]
+}
+
+func legacyVarint(v int64) []byte {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutVarint(buf[:], v)
+	return buf[:n]
+}
+
+func TestReadLegacyVarintSnapshotMetadata(t *testing.T) {
+	ms := newTestMetaStore(t)
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		if _, err := CreateSnapshot(ctx, snapshots.KindActive, "active-key", ""); err != nil {
+			return err
+		}
+		_, err := CommitActive(ctx, "active-key", "committed-key", snapshots.Usage{
+			Inodes: 7,
+			Size:   12345,
+		})
+		return err
+	})
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		return withSnapshotBucket(ctx, "committed-key", func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
+			if err := bkt.Put(bucketKeyID, legacyUvarint(1)); err != nil {
+				return err
+			}
+			if err := bkt.Put(bucketKeyKind, []byte{byte(snapshots.KindCommitted)}); err != nil {
+				return err
+			}
+			if err := bkt.Put(bucketKeyInodes, legacyVarint(7)); err != nil {
+				return err
+			}
+			return bkt.Put(bucketKeySize, legacyVarint(12345))
+		})
+	})
+
+	withTestTransaction(t, ms, false, func(ctx context.Context) error {
+		id, info, usage, err := GetInfo(ctx, "committed-key")
+		if err != nil {
+			return err
+		}
+		if id != "1" {
+			t.Fatalf("id = %q, want %q", id, "1")
+		}
+		if info.Kind != snapshots.KindCommitted {
+			t.Fatalf("kind = %v, want %v", info.Kind, snapshots.KindCommitted)
+		}
+		if usage.Inodes != 7 || usage.Size != 12345 {
+			t.Fatalf("usage = %+v, want inodes=7 size=12345", usage)
+		}
+		return nil
+	})
+}
+
+func TestWritesLegacySnapshotMetadataEncoding(t *testing.T) {
+	ms := newTestMetaStore(t)
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		if _, err := CreateSnapshot(ctx, snapshots.KindActive, "active-key", ""); err != nil {
+			return err
+		}
+		_, err := CommitActive(ctx, "active-key", "committed-key", snapshots.Usage{
+			Inodes: 7,
+			Size:   12345,
+		})
+		return err
+	})
+
+	withTestTransaction(t, ms, false, func(ctx context.Context) error {
+		return withSnapshotBucket(ctx, "committed-key", func(ctx context.Context, bkt, pbkt *bolt.Bucket) error {
+			id := bkt.Get(bucketKeyID)
+			if got, want := id, legacyUvarint(1); string(got) != string(want) {
+				t.Fatalf("id encoding = %v, want %v", got, want)
+			}
+			kind := bkt.Get(bucketKeyKind)
+			if got, want := kind, []byte{byte(snapshots.KindCommitted)}; string(got) != string(want) {
+				t.Fatalf("kind encoding = %v, want %v", got, want)
+			}
+			inodes := bkt.Get(bucketKeyInodes)
+			if got, want := inodes, legacyVarint(7); string(got) != string(want) {
+				t.Fatalf("inodes encoding = %v, want %v", got, want)
+			}
+			size := bkt.Get(bucketKeySize)
+			if got, want := size, legacyVarint(12345); string(got) != string(want) {
+				t.Fatalf("size encoding = %v, want %v", got, want)
+			}
+			return nil
+		})
+	})
+}
+
+func TestReadLegacyDevboxContentRootBucket(t *testing.T) {
+	ms := newTestMetaStore(t)
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		if _, err := CreateSnapshot(ctx, snapshots.KindActive, "active-key", ""); err != nil {
+			return err
+		}
+		tx := ctx.Value(transactionKey{}).(*bolt.Tx)
+		version := tx.Bucket(bucketKeyStorageVersion)
+		root, err := version.CreateBucketIfNotExists(DevboxStoragePathBucket)
+		if err != nil {
+			return err
+		}
+		sbkt := version.Bucket(bucketKeySnapshot).Bucket([]byte("active-key"))
+		if err := sbkt.Put(DevboxKeyContentID, []byte("content-1")); err != nil {
+			return err
+		}
+		cbkt, err := root.CreateBucketIfNotExists([]byte("content-1"))
+		if err != nil {
+			return err
+		}
+		if err := cbkt.Put(DevboxKeyLvName, []byte("devbox-content-1")); err != nil {
+			return err
+		}
+		if err := cbkt.Put(DevboxKeyStatus, DevboxStatusActive); err != nil {
+			return err
+		}
+		if err := cbkt.Put(DevboxKeyPath, []byte("/snapshots/1")); err != nil {
+			return err
+		}
+		return cbkt.Put(DevboxKeySnapshotKey, []byte("active-key"))
+	})
+
+	withTestTransaction(t, ms, false, func(ctx context.Context) error {
+		contentID, mountPath, err := GetSnapshotDevboxInfo(ctx, "active-key")
+		if err != nil {
+			return err
+		}
+		if contentID != "content-1" {
+			t.Fatalf("contentID = %q, want %q", contentID, "content-1")
+		}
+		if mountPath != "/snapshots/1" {
+			t.Fatalf("mountPath = %q, want %q", mountPath, "/snapshots/1")
+		}
+		lvName, err := GetDevboxLvName(ctx, "content-1", "")
+		if err != nil {
+			return err
+		}
+		if lvName != "devbox-content-1" {
+			t.Fatalf("lvName = %q, want %q", lvName, "devbox-content-1")
+		}
+		lvs, err := GetDevboxLvNames(ctx)
+		if err != nil {
+			return err
+		}
+		if _, ok := lvs["devbox-content-1"]; !ok {
+			t.Fatalf("expected legacy LV to be listed, got %#v", lvs)
+		}
+		return nil
+	})
+
+	withTestTransaction(t, ms, true, func(ctx context.Context) error {
+		mountPath, err := SetUnmountedWithKey(ctx, "active-key")
+		if err != nil {
+			return err
+		}
+		if mountPath != "/snapshots/1" {
+			t.Fatalf("mountPath = %q, want %q", mountPath, "/snapshots/1")
+		}
+		return nil
+	})
 }
 
 func TestSetUnmountedWithKeyKeepsContentReferenced(t *testing.T) {
