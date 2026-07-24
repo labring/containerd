@@ -206,7 +206,7 @@ func DiffDirChanges(ctx context.Context, baseDir, diffDir string, source DiffSou
 				return err
 			}
 
-			_, err = os.Stat(filepath.Join(baseDir, path))
+			_, err = os.Lstat(filepath.Join(baseDir, path))
 			if err != nil {
 				if !os.IsNotExist(err) {
 					return err
@@ -223,7 +223,7 @@ func DiffDirChanges(ctx context.Context, baseDir, diffDir string, source DiffSou
 			kind = ChangeKindAdd
 
 			// ...Unless it already existed in a baseDir, in which case, it's a modification
-			stat, err := os.Stat(filepath.Join(baseDir, path))
+			stat, err := os.Lstat(filepath.Join(baseDir, path))
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}
