@@ -198,6 +198,57 @@ func TestOverlayApplyKeepsNonWhiteoutAncestorENOTDIR(t *testing.T) {
 	}
 }
 
+func TestApplySkipsMtimeForRemovedDirectory(t *testing.T) {
+	ctx := logtest.WithT(context.Background(), t)
+	root := t.TempDir()
+	tc := tartest.TarContext{}.WithUIDGID(os.Getuid(), os.Getgid())
+
+	if _, err := Apply(ctx, root, tartest.TarFromWriterTo(tartest.TarAll(
+		tc.Dir("home", 0755),
+		tc.Dir("home/devbox", 0755),
+		tc.Dir("home/devbox/.vscode-server", 0755),
+		tc.Dir("home/devbox/.vscode-server/cli", 0755),
+		tc.File("home/devbox/.wh..vscode-server", []byte{}, 0644),
+	))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(root, "home/devbox/.vscode-server")); !os.IsNotExist(err) {
+		t.Fatalf("expected .vscode-server to be removed, got %v", err)
+	}
+}
+
+func TestMkparentSkipsLowerParentENOTDIR(t *testing.T) {
+	ctx := logtest.WithT(context.Background(), t)
+	root := t.TempDir()
+	lower := t.TempDir()
+
+	for _, dir := range []string{
+		filepath.Join(root, "home/devbox"),
+		filepath.Join(lower, "home/devbox"),
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(lower, "home/devbox/.vscode-server"), []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := filepath.Join(root, "home/devbox/.vscode-server/cli")
+	if err := mkparent(ctx, parent, root, []string{lower}); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.IsDir() {
+		t.Fatalf("expected %q to be created as directory, got mode %v", parent, fi.Mode())
+	}
+}
+
 type overlayDiffApplier struct {
 	tmp  string
 	diff func(context.Context, io.Writer, string, string, ...WriteDiffOpt) error

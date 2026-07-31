@@ -250,7 +250,7 @@ func applyNaive(ctx context.Context, root string, r io.Reader, options ApplyOpti
 
 		// Split name and resolve symlinks for root directory.
 		ppath, base := filepath.Split(hdr.Name)
-		ppath, err = fs.RootPath(root, ppath)
+		ppath, err = rootPathReplacingWhiteoutAncestor(ctx, root, ppath, options.Parents)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get root path: %w", err)
 		}
@@ -317,9 +317,15 @@ func applyNaive(ctx context.Context, root string, r io.Reader, options ApplyOpti
 	for _, hdr := range dirs {
 		path, err := fs.RootPath(root, hdr.Name)
 		if err != nil {
+			if isNotExistOrNotDir(err) {
+				continue
+			}
 			return 0, err
 		}
 		if err := chtimes(path, boundTime(latestTime(hdr.AccessTime, hdr.ModTime)), boundTime(hdr.ModTime)); err != nil {
+			if isNotExistOrNotDir(err) {
+				continue
+			}
 			return 0, err
 		}
 	}
@@ -479,6 +485,9 @@ func mkparent(ctx context.Context, path, root string, parents []string) error {
 	for _, p := range parents {
 		ppath, err := fs.RootPath(p, path[len(root):])
 		if err != nil {
+			if errors.Is(err, syscall.ENOTDIR) {
+				continue
+			}
 			return err
 		}
 
@@ -500,6 +509,68 @@ func mkparent(ctx context.Context, path, root string, parents []string) error {
 	log.G(ctx).Debugf("parent directory %q not found: default permissions(0755) used", path)
 
 	return nil
+}
+
+func rootPathReplacingWhiteoutAncestor(ctx context.Context, root, path string, parents []string) (string, error) {
+	rpath, err := fs.RootPath(root, path)
+	if err == nil || !errors.Is(err, syscall.ENOTDIR) {
+		return rpath, err
+	}
+
+	// RootPath can hit ENOTDIR before mkparent sees an overlay whiteout ancestor.
+	replaced, replaceErr := replaceWhiteoutAncestor(ctx, root, path, parents)
+	if replaceErr != nil {
+		return "", replaceErr
+	}
+	if !replaced {
+		return "", err
+	}
+
+	return fs.RootPath(root, path)
+}
+
+func replaceWhiteoutAncestor(ctx context.Context, root, path string, parents []string) (bool, error) {
+	cleaned := filepath.Clean(filepath.Join("/", path))
+	if cleaned == string(os.PathSeparator) {
+		return false, nil
+	}
+
+	var prefix string
+	for _, part := range strings.Split(strings.TrimPrefix(cleaned, string(os.PathSeparator)), string(os.PathSeparator)) {
+		prefix = filepath.Join(prefix, part)
+
+		rpath, err := fs.RootPath(root, prefix)
+		if err != nil {
+			if errors.Is(err, syscall.ENOTDIR) {
+				return false, nil
+			}
+			return false, err
+		}
+
+		fi, err := os.Lstat(rpath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			if errors.Is(err, syscall.ENOTDIR) {
+				return false, nil
+			}
+			return false, err
+		}
+		if fi.IsDir() {
+			continue
+		}
+		if !isOverlayWhiteout(fi) {
+			return false, nil
+		}
+		return true, mkparent(ctx, rpath, root, parents)
+	}
+
+	return false, nil
+}
+
+func isNotExistOrNotDir(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR)
 }
 
 // ChangeWriter provides tar stream from filesystem change information.
