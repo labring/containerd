@@ -19,11 +19,13 @@ package archive
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/containerd/containerd/archive/tartest"
@@ -117,6 +119,82 @@ func TestOverlayApplyReplacesWhiteoutParent(t *testing.T) {
 	}
 	if string(b) != "ok" {
 		t.Fatalf("unexpected cli content %q", string(b))
+	}
+}
+
+func TestOverlayApplyReplacesWhiteoutAncestor(t *testing.T) {
+	testutil.RequiresRoot(t)
+
+	ctx := logtest.WithT(context.Background(), t)
+	root := t.TempDir()
+	tc := tartest.TarContext{}.WithUIDGID(os.Getuid(), os.Getgid())
+
+	if _, err := Apply(ctx, root, tartest.TarFromWriterTo(tartest.TarAll(
+		tc.Dir("home", 0755),
+		tc.Dir("home/devbox", 0755),
+		tc.File("home/devbox/.wh..vscode-server", []byte{}, 0644),
+	)), WithConvertWhiteout(OverlayConvertWhiteout)); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := filepath.Join(root, "home/devbox/.vscode-server")
+	fi, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isOverlayWhiteout(fi) {
+		t.Fatalf("expected %q to be an overlay whiteout, got mode %v", parent, fi.Mode())
+	}
+
+	deepFile := filepath.Join(parent, "cli/server/bin")
+	if _, err := Apply(ctx, root, tartest.TarFromWriterTo(tartest.TarAll(
+		tc.File("home/devbox/.vscode-server/cli/server/bin", []byte("ok"), 0644),
+	)), WithConvertWhiteout(OverlayConvertWhiteout)); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err = os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.IsDir() {
+		t.Fatalf("expected %q to be replaced by a directory, got mode %v", parent, fi.Mode())
+	}
+
+	b, err := os.ReadFile(deepFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "ok" {
+		t.Fatalf("unexpected deep file content %q", string(b))
+	}
+}
+
+func TestOverlayApplyKeepsNonWhiteoutAncestorENOTDIR(t *testing.T) {
+	ctx := logtest.WithT(context.Background(), t)
+	root := t.TempDir()
+	tc := tartest.TarContext{}.WithUIDGID(os.Getuid(), os.Getgid())
+
+	parent := filepath.Join(root, "home/devbox/.vscode-server")
+	if err := os.MkdirAll(filepath.Dir(parent), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parent, []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Apply(ctx, root, tartest.TarFromWriterTo(tartest.TarAll(
+		tc.File("home/devbox/.vscode-server/cli/server/bin", []byte("ok"), 0644),
+	)), WithConvertWhiteout(OverlayConvertWhiteout)); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("expected ENOTDIR, got %v", err)
+	}
+
+	fi, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.Mode().IsRegular() {
+		t.Fatalf("expected %q to remain a regular file, got mode %v", parent, fi.Mode())
 	}
 }
 
