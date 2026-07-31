@@ -448,7 +448,7 @@ func mkparent(ctx context.Context, path, root string, parents []string) error {
 				Err:  syscall.ENOTDIR,
 			}
 		}
-	} else if !os.IsNotExist(err) {
+	} else if !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 		return err
 	}
 
