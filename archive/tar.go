@@ -437,10 +437,16 @@ func mkparent(ctx context.Context, path, root string, parents []string) error {
 		if dir.IsDir() {
 			return nil
 		}
-		return &os.PathError{
-			Op:   "mkparent",
-			Path: path,
-			Err:  syscall.ENOTDIR,
+		if isOverlayWhiteout(dir) {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+		} else {
+			return &os.PathError{
+				Op:   "mkparent",
+				Path: path,
+				Err:  syscall.ENOTDIR,
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return err

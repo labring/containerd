@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/containerd/containerd/archive/tartest"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/testutil"
 	"github.com/containerd/containerd/snapshots/overlay/overlayutils"
@@ -69,6 +71,53 @@ func TestOverlayApplyNoParents(t *testing.T) {
 		},
 		t: t,
 	})
+}
+
+func TestOverlayApplyReplacesWhiteoutParent(t *testing.T) {
+	testutil.RequiresRoot(t)
+
+	ctx := logtest.WithT(context.Background(), t)
+	root := t.TempDir()
+	tc := tartest.TarContext{}.WithUIDGID(os.Getuid(), os.Getgid())
+
+	if _, err := Apply(ctx, root, tartest.TarFromWriterTo(tartest.TarAll(
+		tc.Dir("home", 0755),
+		tc.Dir("home/devbox", 0755),
+		tc.File("home/devbox/.wh..vscode-server", []byte{}, 0644),
+	)), WithConvertWhiteout(OverlayConvertWhiteout)); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := filepath.Join(root, "home/devbox/.vscode-server")
+	fi, err := os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isOverlayWhiteout(fi) {
+		t.Fatalf("expected %q to be an overlay whiteout, got mode %v", parent, fi.Mode())
+	}
+
+	if _, err := Apply(ctx, root, tartest.TarFromWriterTo(tartest.TarAll(
+		tc.File("home/devbox/.vscode-server/cli", []byte("ok"), 0644),
+	)), WithConvertWhiteout(OverlayConvertWhiteout)); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err = os.Lstat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.IsDir() {
+		t.Fatalf("expected %q to be replaced by a directory, got mode %v", parent, fi.Mode())
+	}
+
+	b, err := os.ReadFile(filepath.Join(parent, "cli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "ok" {
+		t.Fatalf("unexpected cli content %q", string(b))
+	}
 }
 
 type overlayDiffApplier struct {
