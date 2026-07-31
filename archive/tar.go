@@ -449,7 +449,11 @@ func mkparent(ctx context.Context, path, root string, parents []string) error {
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		return err
+		if !errors.Is(err, syscall.ENOTDIR) {
+			return err
+		}
+		// ENOTDIR means some ancestor is not a directory. Walk upward so a
+		// whiteout ancestor can be replaced instead of returning this lookup error.
 	}
 
 	i := len(path)
