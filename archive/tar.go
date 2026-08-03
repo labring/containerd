@@ -322,6 +322,16 @@ func applyNaive(ctx context.Context, root string, r io.Reader, options ApplyOpti
 			}
 			return 0, err
 		}
+		fi, err := os.Lstat(path)
+		if err != nil {
+			if isNotExistOrNotDir(err) {
+				continue
+			}
+			return 0, err
+		}
+		if !fi.IsDir() {
+			continue
+		}
 		if err := chtimes(path, boundTime(latestTime(hdr.AccessTime, hdr.ModTime)), boundTime(hdr.ModTime)); err != nil {
 			if isNotExistOrNotDir(err) {
 				continue
