@@ -60,3 +60,8 @@ func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageCon
 func snapshotterOpts(snapshotterName string, config *runtime.ContainerConfig, sandboxConfig *runtime.PodSandboxConfig) ([]snapshots.Opt, error) {
 	return []snapshots.Opt{}, nil
 }
+
+// Non-Linux builds don't support the devbox-backed writable-layer flow.
+func devboxSnapshotterOpts(snapshotterName string, config *runtime.PodSandboxConfig) (snapshots.Opt, error) {
+	return nil, nil
+}

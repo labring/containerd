@@ -91,7 +91,7 @@ const (
 	// runtimeRunhcsV1 is the runtime type for runhcs.
 	runtimeRunhcsV1 = "io.containerd.runhcs.v1"
 
-	// DevboxSnapshotter is the name of the devbox snapshotter.
+	// DevboxSnapshotter is the name of the classic devbox snapshotter.
 	DevboxSnapshotter = "devbox"
 )
 

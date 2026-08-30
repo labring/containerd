@@ -30,6 +30,7 @@ import (
 	"github.com/containerd/containerd/contrib/seccomp"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/platforms"
 	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
 	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
@@ -42,6 +43,7 @@ import (
 	"github.com/containerd/containerd/pkg/cap"
 	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/pkg/cri/config"
+	"github.com/containerd/containerd/pkg/cri/internal/devboxsnapshotter"
 	"github.com/containerd/containerd/pkg/cri/opts"
 	customopts "github.com/containerd/containerd/pkg/cri/opts"
 	"github.com/containerd/containerd/pkg/cri/util"
@@ -269,6 +271,78 @@ func TestContainerCapabilities(t *testing.T) {
 			}
 			assert.Empty(t, spec.Process.Capabilities.Inheritable)
 			assert.Empty(t, spec.Process.Capabilities.Ambient)
+		})
+	}
+}
+
+func TestSnapshotterOptsForDevboxLabels(t *testing.T) {
+	tests := []struct {
+		name           string
+		snapshotter    string
+		sandboxConfig  *runtime.PodSandboxConfig
+		expectedLabels map[string]string
+	}{
+		{
+			name:        "stargz keeps relevant devbox annotations",
+			snapshotter: devboxsnapshotter.StargzSnapshotter,
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-1",
+					devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "20Gi",
+					"other.annotation": "ignored",
+				},
+			},
+			expectedLabels: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-1",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "20Gi",
+			},
+		},
+		{
+			name:        "devbox keeps relevant devbox annotations",
+			snapshotter: "devbox",
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-9",
+					devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "8Gi",
+					"other.annotation": "ignored",
+				},
+			},
+			expectedLabels: map[string]string{
+				devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-9",
+				devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "8Gi",
+			},
+		},
+		{
+			name:        "non-stargz skips devbox labels",
+			snapshotter: "overlayfs",
+			sandboxConfig: &runtime.PodSandboxConfig{
+				Annotations: map[string]string{
+					devboxsnapshotter.SealosDevboxContentIDAnnotation:    "workspace-2",
+					devboxsnapshotter.SealosDevboxStorageLimitAnnotation: "10Gi",
+				},
+			},
+			expectedLabels: nil,
+		},
+		{
+			name:           "nil sandbox config produces no opts",
+			snapshotter:    devboxsnapshotter.StargzSnapshotter,
+			sandboxConfig:  nil,
+			expectedLabels: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := snapshotterOpts(tt.snapshotter, &runtime.ContainerConfig{}, tt.sandboxConfig)
+			if tt.expectedLabels == nil {
+				require.Len(t, opts, 0)
+				return
+			}
+
+			require.Len(t, opts, 1)
+			info := &snapshots.Info{Labels: make(map[string]string)}
+			opts[0](info)
+			assert.Equal(t, tt.expectedLabels, info.Labels)
 		})
 	}
 }

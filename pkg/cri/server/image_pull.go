@@ -210,8 +210,8 @@ func (c *criService) PullImage(ctx context.Context, r *runtime.PullImageRequest)
 
 		// Create a copy of labels for each reference to avoid modifying the original map
 		var imageLabels map[string]string
-		if r == repoTag && snapshotter == DevboxSnapshotter {
-			// Only add pin label for repoTag when snapshotter is devbox
+		if r == repoTag && isDevboxWritableSnapshotter(snapshotter) {
+			// Only add pin label for repoTag when the snapshotter participates in the devbox writable-layer flow.
 			imageLabels = make(map[string]string)
 			for k, v := range labels {
 				imageLabels[k] = v

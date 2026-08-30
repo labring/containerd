@@ -448,7 +448,7 @@ func handleContainerExit(ctx context.Context, e *eventtypes.TaskExit, cntr conta
 				return status, err
 			}
 			fmt.Println("Container snapshotter:", container.Snapshotter, "ID:", cntr.Container.ID())
-			if container.Snapshotter == "devbox" {
+			if isDevboxWritableSnapshotter(container.Snapshotter) {
 				err = c.client.UpdateDevboxSnapshot(ctx, container.Snapshotter, container.ID, unmountLvm, "true")
 				if err != nil {
 					logrus.WithError(err).Errorf("Failed to update devbox snapshot for container %s", cntr.Container.ID())
