@@ -508,3 +508,29 @@ func TestCheckLocalImagePullConfigs(t *testing.T) {
 		})
 	}
 }
+
+func TestRunscPortForwardConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name, typ, binary, root string
+		valid                   bool
+	}{
+		{"disabled", "io.containerd.runc.v2", "", "", true},
+		{"enabled", "io.containerd.runsc.v1", "/usr/local/bin/runsc", "/run/containerd/runsc/k8s.io", true},
+		{"wrong runtime", "io.containerd.runc.v2", "/runsc", "/state", false},
+		{"relative binary", "io.containerd.runsc.v1", "runsc", "/state", false},
+		{"missing root", "io.containerd.runsc.v1", "/runsc", "", false},
+		{"missing binary", "io.containerd.runsc.v1", "", "/state", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &RuntimeConfig{ContainerdConfig: ContainerdConfig{DefaultRuntimeName: "test", Runtimes: map[string]Runtime{
+				"test": {Type: tt.typ, RunscPortForwardBinary: tt.binary, RunscPortForwardRoot: tt.root},
+			}}}
+			_, err := ValidateRuntimeConfig(context.Background(), cfg)
+			if tt.valid {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, "runsc port forwarding requires")
+			}
+		})
+	}
+}

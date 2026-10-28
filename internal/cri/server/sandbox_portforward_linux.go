@@ -35,6 +35,14 @@ func (c *criService) portForward(ctx context.Context, id string, port int32, str
 		return fmt.Errorf("failed to find sandbox %q in store: %w", id, err)
 	}
 
+	rt, err := c.config.GetSandboxRuntime(s.Config, s.RuntimeHandler)
+	if err != nil {
+		return err
+	}
+	if rt.RunscPortForwardBinary != "" {
+		return runscPortForward(ctx, rt.RunscPortForwardBinary, rt.RunscPortForwardRoot, id, port, stream)
+	}
+
 	var (
 		netNSDo func(func(ns.NetNS) error) error
 		// netNSPath is the network namespace path for logging.

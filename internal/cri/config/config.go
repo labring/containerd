@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	gruntime "runtime"
 	"slices"
 	"time"
@@ -130,6 +131,12 @@ type Runtime struct {
 	// we can also set it to "streaming" to create a stream by streaming api,
 	// and use it as a channel to transfer the io stream
 	IOType string `toml:"io_type" json:"io_type"`
+
+	// RunscPortForwardBinary enables the runsc stream port-forward adapter for this runtime.
+	// Only io.containerd.runsc.v1 is supported. Empty preserves the netns forwarding path.
+	RunscPortForwardBinary string `toml:"runsc_port_forward_binary" json:"runscPortForwardBinary"`
+	// RunscPortForwardRoot is the effective runsc state directory, including the containerd namespace.
+	RunscPortForwardRoot string `toml:"runsc_port_forward_root" json:"runscPortForwardRoot"`
 }
 
 // ContainerdConfig contains toml config related to containerd
@@ -660,6 +667,12 @@ func ValidateRuntimeConfig(ctx context.Context, c *RuntimeConfig) ([]deprecation
 		}
 		if r.IOType != IOTypeStreaming && r.IOType != IOTypeFifo {
 			return warnings, errors.New("`io_type` can only be `streaming` or `named_pipe`")
+		}
+
+		if r.RunscPortForwardBinary != "" || r.RunscPortForwardRoot != "" {
+			if r.Type != "io.containerd.runsc.v1" || !filepath.IsAbs(r.RunscPortForwardBinary) || !filepath.IsAbs(r.RunscPortForwardRoot) {
+				return warnings, fmt.Errorf("runtime %q: runsc port forwarding requires io.containerd.runsc.v1 and absolute binary/root paths", k)
+			}
 		}
 	}
 
