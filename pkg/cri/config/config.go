@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"time"
 
 	"github.com/containerd/containerd/pkg/deprecation"
@@ -65,6 +66,12 @@ const (
 // Runtime struct to contain the type(ID), engine, and root variables for a default runtime
 // and a runtime for untrusted workload.
 type Runtime struct {
+	// RunscPortForwardBinary enables the runsc stream port-forward adapter for this runtime.
+	// Only io.containerd.runsc.v1 is supported. Empty preserves the netns forwarding path.
+	RunscPortForwardBinary string `toml:"runsc_port_forward_binary" json:"runscPortForwardBinary"`
+	// RunscPortForwardRoot is the effective runsc state directory, including the containerd namespace.
+	RunscPortForwardRoot string `toml:"runsc_port_forward_root" json:"runscPortForwardRoot"`
+
 	// Type is the runtime type to use in containerd e.g. io.containerd.runtime.v1.linux
 	Type string `toml:"runtime_type" json:"runtimeType"`
 	// Path is an optional field that can be used to overwrite path to a shim runtime binary.
@@ -475,6 +482,12 @@ func ValidatePluginConfig(ctx context.Context, c *PluginConfig) ([]deprecation.W
 		// for `io.containerd.runtime.v1.linux`.
 	}
 	for k, r := range c.ContainerdConfig.Runtimes {
+		if r.RunscPortForwardBinary != "" || r.RunscPortForwardRoot != "" {
+			if r.Type != "io.containerd.runsc.v1" || !filepath.IsAbs(r.RunscPortForwardBinary) || !filepath.IsAbs(r.RunscPortForwardRoot) {
+				return warnings, fmt.Errorf("runtime %q: runsc port forwarding requires io.containerd.runsc.v1 and absolute binary/root paths", k)
+			}
+		}
+
 		if r.Engine != "" {
 			if r.Type != plugin.RuntimeLinuxV1 {
 				return warnings, fmt.Errorf("`runtime_engine` only works for runtime %s", plugin.RuntimeLinuxV1)
